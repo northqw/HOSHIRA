@@ -49,7 +49,8 @@ Android и Android TV.
 ### Для запуска установленного приложения
 
 - Windows 10 или Windows 11, x64;
-- Microsoft Edge WebView2 Runtime;
+- Microsoft Edge WebView2 Runtime — при отсутствии установщик добавит
+  официальный Evergreen Runtime от Microsoft;
 - подключение к интернету.
 
 JVM поставляется вместе с desktop-дистрибутивом и отдельно пользователю не нужна.

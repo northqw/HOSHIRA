@@ -49,7 +49,8 @@ and Android TV.
 ### Installed application
 
 - Windows 10 or Windows 11, x64;
-- Microsoft Edge WebView2 Runtime;
+- Microsoft Edge WebView2 Runtime; when missing, the installer adds the
+  official Microsoft Evergreen Runtime;
 - an internet connection.
 
 The JVM is bundled with the desktop distribution.

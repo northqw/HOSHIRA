@@ -16,6 +16,8 @@ $tempDir = Join-Path $desktopApp "build\custom-installer\jpackage-temp-$Version-
 $outputDir = Join-Path $repoRoot "build-artifacts"
 $outputFile = Join-Path $outputDir "Hoshira-$Version-Setup.exe"
 $installerSource = Join-Path $desktopApp "installer\HoshiraInstaller.cs"
+$webView2Bootstrapper = Join-Path $payloadDir "MicrosoftEdgeWebview2Setup.exe"
+$webView2BootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 $csharpCompiler = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $jpackage = Join-Path $env:JAVA_HOME "bin\jpackage.exe"
 
@@ -56,6 +58,24 @@ try {
     New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
     $payloadFile = Join-Path $payloadDir "Hoshira-$Version.msi"
+    if (Test-Path -LiteralPath $webView2Bootstrapper) {
+        Remove-Item -LiteralPath $webView2Bootstrapper -Force
+    }
+    Invoke-WebRequest `
+        -Uri $webView2BootstrapperUrl `
+        -OutFile $webView2Bootstrapper `
+        -UseBasicParsing
+    if (-not (Test-Path -LiteralPath $webView2Bootstrapper) -or
+        (Get-Item -LiteralPath $webView2Bootstrapper).Length -lt 100KB) {
+        throw "The Microsoft Edge WebView2 bootstrapper download is invalid."
+    }
+    $webView2Signature = Get-AuthenticodeSignature -LiteralPath $webView2Bootstrapper
+    if ($webView2Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $null -eq $webView2Signature.SignerCertificate -or
+        $webView2Signature.SignerCertificate.Subject -notlike "*Microsoft Corporation*") {
+        throw "The Microsoft Edge WebView2 bootstrapper signature is not valid."
+    }
+
     if (Test-Path -LiteralPath $payloadFile) {
         Remove-Item -LiteralPath $payloadFile -Force
     }
@@ -106,6 +126,7 @@ try {
         /reference:System.Windows.Forms.dll `
         "/resource:$payloadFile,Hoshira.Payload.msi" `
         "/resource:$iconFile,Hoshira.SetupIcon" `
+        "/resource:$webView2Bootstrapper,Hoshira.WebView2Bootstrapper.exe" `
         $installerSource
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to compile the custom Hoshira installer shell."
