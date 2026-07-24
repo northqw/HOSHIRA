@@ -53,58 +53,6 @@ and Android TV.
 
 The JVM is bundled with the desktop distribution.
 
-### Development
-
-- JDK 21;
-- Git;
-- Windows 10/11 for the native WebView2 player and installer packaging.
-
-## Developer quick start
-
-```powershell
-git clone https://gitverse.ru/northqw/HOSHIRA.git
-cd HOSHIRA
-.\gradlew.bat :desktopApp:run
-```
-
-Run tests:
-
-```powershell
-.\gradlew.bat :desktopApp:test
-```
-
-Build a release app image:
-
-```powershell
-.\gradlew.bat :desktopApp:createReleaseDistributable
-```
-
-Build the branded Windows installer:
-
-```powershell
-$env:JAVA_HOME = "C:\Program Files\Java\jdk-21"
-.\desktopApp\tools\build_custom_windows_installer.ps1 -Version 0.2.4
-```
-
-Generated packages are placed in `build-artifacts/`. The directory is excluded
-from Git; binary releases should be distributed separately from source code.
-
-## API configuration
-
-Catalog and account data are requested directly from
-[Yani API](https://api.yani.tv/swagger).
-
-The public client token is sent through the `X-Application` header. It can be
-overridden without changing source code:
-
-```powershell
-$env:YANI_APPLICATION_TOKEN = "your-public-application-token"
-```
-
-No private API token is bundled with the application. After sign-in, the access
-token is encrypted with Windows DPAPI and stored only in the current user's
-local profile.
-
 ## Repository layout
 
 ```text
