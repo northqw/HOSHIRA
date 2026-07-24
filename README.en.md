@@ -15,6 +15,7 @@
     <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
     <img src="https://img.shields.io/badge/Kotlin-2.3.20-7f52ff?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.3.20">
     <img src="https://img.shields.io/badge/Compose%20Desktop-1.11.1-4285f4?style=flat-square" alt="Compose Desktop 1.11.1">
+    <img src="https://img.shields.io/badge/license-proprietary-111318?style=flat-square" alt="Proprietary license">
   </p>
 </div>
 
@@ -105,7 +106,11 @@ respective owners.
 
 ## Licensing
 
-No open-source license is currently granted for the application code. Unless a
-separate license explicitly states otherwise, all rights to Hoshira source code
-are reserved. Font, WebView2 loader, and other third-party license texts are
-available under `third_party/`.
+Copyright © 2026 northqw. All rights reserved.
+
+The source code is published for reference and review only. Use, copying,
+modification, and distribution are prohibited without prior written permission
+from the copyright holder. See [LICENSE](LICENSE) for the complete terms.
+
+Third-party components and materials remain subject to their respective
+licenses. Applicable notices are available under `third_party/`.
