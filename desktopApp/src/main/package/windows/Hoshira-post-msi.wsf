@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<job>
+  <script language="JScript">
+    <![CDATA[
+      var shell = new ActiveXObject("WScript.Shell");
+      var files = new ActiveXObject("Scripting.FileSystemObject");
+
+      function quote(value) {
+        return '"' + value.replace(/"/g, '""') + '"';
+      }
+
+      var configDir = files.GetParentFolderName(WScript.ScriptFullName);
+      var tempDir = files.GetParentFolderName(configDir);
+      var wixObjDir = files.BuildPath(tempDir, "wixobj");
+      var sourceMsi = shell.ExpandEnvironmentStrings("%JpMsiFile%");
+      var localizedMsi = sourceMsi + ".localized.msi";
+      var localizationFile = files.BuildPath(configDir, "MsiInstallerStrings_ru.wxl");
+
+      // jpackage 21 always performs its first WiX link in English. The EXE
+      // bundler provides this post-MSI hook before embedding the MSI, so we
+      // relink the same object files with the official WiX Russian UI culture.
+      var localization = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<WixLocalization Culture="ru-ru" xmlns="http://schemas.microsoft.com/wix/2006/localization" Codepage="1251">',
+        '  <String Id="message.install.dir.exist">Папка [INSTALLDIR] уже существует. Всё равно установить приложение в эту папку?</String>',
+        '  <String Id="MainFeatureTitle">Приложение Hoshira</String>',
+        '  <String Id="DowngradeErrorMessage">На компьютере уже установлена более новая версия [ProductName]. Установка предыдущей версии невозможна.</String>',
+        '  <String Id="DisallowUpgradeErrorMessage">На компьютере уже установлена предыдущая версия [ProductName]. Обновление отключено.</String>',
+        '  <String Id="ShortcutPromptDlg_Title">Установка [ProductName]</String>',
+        '  <String Id="ShortcutPromptDlgTitle">{\\WixUI_Font_Title}Ярлыки</String>',
+        '  <String Id="ShortcutPromptDlgBannerBitmap">WixUI_Bmp_Banner</String>',
+        '  <String Id="ShortcutPromptDlgDescription">Выберите, какие ярлыки нужно создать.</String>',
+        '  <String Id="ShortcutPromptDlgDesktopShortcutControlLabel">Создать ярлык на рабочем столе</String>',
+        '  <String Id="ShortcutPromptDlgStartMenuShortcutControlLabel">Создать ярлык в меню «Пуск»</String>',
+        '  <String Id="InstallDirNotEmptyDlg_Title">Установка [ProductName]</String>',
+        '  <String Id="ContextMenuCommandLabel">Открыть с помощью [ProductName]</String>',
+        '</WixLocalization>'
+      ].join("\r\n");
+
+      var stream = new ActiveXObject("ADODB.Stream");
+      stream.Type = 2;
+      stream.Charset = "utf-8";
+      stream.Open();
+      stream.WriteText(localization);
+      stream.SaveToFile(localizationFile, 2);
+      stream.Close();
+
+      var command = [
+        "light.exe",
+        "-nologo",
+        "-spdb",
+        "-sval",
+        "-ext", "WixUtilExtension",
+        "-ext", "WixUIExtension",
+        "-out", quote(localizedMsi),
+        "-b", quote(configDir),
+        "-loc", quote(localizationFile),
+        "-cultures:ru-ru",
+        quote(files.BuildPath(wixObjDir, "main.wixobj")),
+        quote(files.BuildPath(wixObjDir, "bundle.wixobj")),
+        quote(files.BuildPath(wixObjDir, "ui.wixobj")),
+        quote(files.BuildPath(wixObjDir, "InstallDirNotEmptyDlg.wixobj"))
+      ].join(" ");
+
+      var exitCode = shell.Run(command, 0, true);
+      if (exitCode != 0 || !files.FileExists(localizedMsi)) {
+        WScript.Echo("Failed to create the Russian MSI package. light.exe exit code: " + exitCode);
+        WScript.Quit(exitCode != 0 ? exitCode : 1);
+      }
+
+      files.DeleteFile(sourceMsi, true);
+      files.MoveFile(localizedMsi, sourceMsi);
+    ]]>
+  </script>
+</job>

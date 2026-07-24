@@ -1,0 +1,51 @@
+# Gradle, Kotlin and build output
+.gradle/
+.kotlin/
+build/
+**/build/
+out/
+
+# IDE and local tooling
+.idea/
+.vscode/
+.fleet/
+.agents/
+.codex/
+*.iml
+local.properties
+
+# Generated installers and development captures
+build-artifacts/
+*.exe
+*.msi
+*.msix
+*.appx
+
+# Local design references and duplicated runtime probes
+/stitch_aniflix_dark_stream/
+/WebView2Loader.dll
+/about_files/
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+secrets.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Logs, crashes and temporary files
+*.log
+*.tmp
+*.bak
+hs_err_pid*
+replay_pid*
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

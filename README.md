@@ -1,0 +1,160 @@
+<div align="center">
+  <img src="desktopApp/src/main/resources/icons/hoshira.png" width="96" alt="Hoshira">
+  <h1>Hoshira</h1>
+  <p><strong>Современный desktop-клиент для вашей аниме-библиотеки.</strong></p>
+  <p>Каталог, поиск, персональные списки и просмотр — в едином нативном интерфейсе Windows.</p>
+
+  <p>
+    <a href="README.md">Русский</a>
+    ·
+    <a href="README.en.md">English</a>
+  </p>
+
+  <p>
+    <img src="https://img.shields.io/badge/version-0.2.4-ff4e00?style=flat-square" alt="Version 0.2.4">
+    <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
+    <img src="https://img.shields.io/badge/Kotlin-2.3.20-7f52ff?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.3.20">
+    <img src="https://img.shields.io/badge/Compose%20Desktop-1.11.1-4285f4?style=flat-square" alt="Compose Desktop 1.11.1">
+  </p>
+</div>
+
+![Главный экран Hoshira](docs/assets/hoshira-home.png)
+
+## О продукте
+
+Hoshira — независимое Windows-приложение с фокусом на быстрый доступ к каталогу,
+персональной библиотеке и просмотру эпизодов. Интерфейс спроектирован как
+полноценный desktop-продукт: с кинематографичной главной страницей, плавными
+переходами, системным установщиком и единым визуальным языком.
+
+Текущая версия — **desktop beta для Windows x64**. Архитектура проекта
+подготовлена к дальнейшему выделению общей Kotlin Multiplatform-логики для
+Android и Android TV.
+
+## Возможности
+
+| Раздел | Что доступно |
+| --- | --- |
+| Главная | Ротация актуальных релизов, подборки и горизонтальные карусели |
+| Каталог | Бесконечная подгрузка, фильтры и сортировка |
+| Поиск | Поиск по каталогу с задержкой ввода и обработкой ошибок |
+| Страница аниме | Баннер, метаданные, жанры, студии озвучки и эпизоды |
+| Плеер | WebView2, выбор источника и качества, собственные элементы управления |
+| Аккаунт | Авторизация YummyAnime, избранное и пользовательские списки |
+| Desktop UX | Кэш изображений, тёмное окно, загрузочные экраны и фирменный установщик |
+
+## Системные требования
+
+### Для запуска установленного приложения
+
+- Windows 10 или Windows 11, x64;
+- Microsoft Edge WebView2 Runtime;
+- подключение к интернету.
+
+JVM поставляется вместе с desktop-дистрибутивом и отдельно пользователю не нужна.
+
+### Для разработки
+
+- JDK 21;
+- Git;
+- Windows 10/11 для нативного WebView2-плеера и сборки установщика.
+
+## Быстрый старт для разработчика
+
+```powershell
+git clone https://gitverse.ru/northqw/HOSHIRA.git
+cd HOSHIRA
+.\gradlew.bat :desktopApp:run
+```
+
+Тесты:
+
+```powershell
+.\gradlew.bat :desktopApp:test
+```
+
+Release app image:
+
+```powershell
+.\gradlew.bat :desktopApp:createReleaseDistributable
+```
+
+Фирменный Windows-установщик:
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-21"
+.\desktopApp\tools\build_custom_windows_installer.ps1 -Version 0.2.4
+```
+
+Результат появится в `build-artifacts/`. Каталог исключён из Git: бинарные
+релизы должны публиковаться отдельно от исходного кода.
+
+## Конфигурация API
+
+Данные каталога и аккаунта загружаются напрямую из
+[Yani API](https://api.yani.tv/swagger).
+
+Публичный клиентский токен отправляется в заголовке `X-Application`. Его можно
+переопределить без изменения исходников:
+
+```powershell
+$env:YANI_APPLICATION_TOKEN = "your-public-application-token"
+```
+
+Приватный API-токен в приложение не встроен. После авторизации access token
+шифруется средствами Windows DPAPI и хранится только в локальном профиле
+текущего пользователя.
+
+## Структура проекта
+
+```text
+desktopApp/
+├─ installer/             # фирменная оболочка установщика
+├─ src/main/kotlin/       # приложение, API, состояние и UI
+├─ src/main/resources/    # иконки и нативный WebView2 loader
+├─ src/test/              # unit-тесты
+└─ tools/                 # сборочные инструменты Windows
+docs/
+├─ ARCHITECTURE.md
+└─ assets/
+third_party/              # тексты лицензий сторонних компонентов
+```
+
+Подробности: [архитектура проекта](docs/ARCHITECTURE.md).
+
+## Технологии
+
+- Kotlin/JVM 21;
+- Compose Multiplatform Desktop;
+- Kotlin Coroutines и Serialization;
+- Coil 3 для изображений и дискового кэша;
+- JNA и Microsoft WebView2 для нативной интеграции с Windows;
+- Gradle Wrapper;
+- WiX/jpackage и собственная C#-оболочка установщика.
+
+## Безопасность и конфиденциальность
+
+- приложение не отправляет учётные данные на собственный сервер Hoshira;
+- сетевые запросы аккаунта направляются непосредственно API-провайдеру;
+- пароль не сохраняется;
+- сессия защищается Windows DPAPI;
+- секреты и signing-материалы исключены из Git.
+
+Если вы обнаружили уязвимость, не публикуйте чувствительные детали в открытом
+issue — свяжитесь с владельцем репозитория через профиль GitVerse.
+
+## Правовой статус
+
+Hoshira — неофициальный независимый клиент. Проект не связан и не аффилирован
+с владельцами Yani/YummyAnime, Microsoft WebView2 или внешними
+видеопровайдерами. Приложение не хранит и не распространяет медиаконтент:
+доступность каталога и воспроизведения зависит от сторонних сервисов, региона
+пользователя и их условий использования.
+
+Товарные знаки и материалы третьих лиц принадлежат соответствующим владельцам.
+
+## Лицензирование
+
+Открытая лицензия для кода пока не предоставлена. Если иное явно не указано в
+отдельном файле, все права на исходный код Hoshira защищены. Лицензии шрифтов,
+WebView2 loader и других сторонних компонентов находятся в `third_party/`.

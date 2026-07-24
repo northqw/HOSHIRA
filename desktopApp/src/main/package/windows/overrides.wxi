@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Include>
+  <!-- Russian (Russia) MSI product language. -->
+  <?undef JpProductLanguage ?>
+  <?define JpProductLanguage=1049 ?>
+</Include>
