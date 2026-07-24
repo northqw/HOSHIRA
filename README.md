@@ -2,7 +2,7 @@
   <img src="desktopApp/src/main/resources/icons/hoshira.png" width="96" alt="Hoshira">
   <h1>Hoshira</h1>
   <p><strong>Современный desktop-клиент для вашей аниме-библиотеки.</strong></p>
-  <p>Каталог, поиск, персональные списки и просмотр — в едином нативном интерфейсе Windows.</p>
+  <p>Каталог, поиск, персональные списки и просмотр — в едином desktop-интерфейсе.</p>
 
   <p>
     <a href="README.md">Русский</a>
@@ -13,6 +13,7 @@
   <p>
     <img src="https://img.shields.io/badge/version-0.2.4-ff4e00?style=flat-square" alt="Version 0.2.4">
     <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
+    <img src="https://img.shields.io/badge/Linux-experimental-111318?style=flat-square&logo=linux" alt="Linux experimental">
     <img src="https://img.shields.io/badge/Kotlin-2.3.20-7f52ff?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.3.20">
     <img src="https://img.shields.io/badge/Compose%20Desktop-1.11.1-4285f4?style=flat-square" alt="Compose Desktop 1.11.1">
     <img src="https://img.shields.io/badge/license-proprietary-111318?style=flat-square" alt="Proprietary license">
@@ -23,14 +24,14 @@
 
 ## О продукте
 
-Hoshira — независимое Windows-приложение с фокусом на быстрый доступ к каталогу,
+Hoshira — независимое desktop-приложение с фокусом на быстрый доступ к каталогу,
 персональной библиотеке и просмотру эпизодов. Интерфейс спроектирован как
 полноценный desktop-продукт: с кинематографичной главной страницей, плавными
 переходами, системным установщиком и единым визуальным языком.
 
-Текущая версия — **desktop beta для Windows x64**. Архитектура проекта
-подготовлена к дальнейшему выделению общей Kotlin Multiplatform-логики для
-Android и Android TV.
+Основная версия — **desktop beta для Windows x64**. Linux x64 доступен как
+экспериментальная сборка: интерфейс, каталог и аккаунт используют общий код,
+а окно, хранилище сессии и браузерный плеер имеют отдельные реализации.
 
 ## Возможности
 
@@ -40,7 +41,7 @@ Android и Android TV.
 | Каталог | Бесконечная подгрузка, фильтры и сортировка |
 | Поиск | Поиск по каталогу с задержкой ввода и обработкой ошибок |
 | Страница аниме | Баннер, метаданные, жанры, студии озвучки и эпизоды |
-| Плеер | WebView2, выбор источника и качества, собственные элементы управления |
+| Плеер | WebView2 на Windows, JCEF на Linux, выбор источника и качества, собственные элементы управления |
 | Аккаунт | Авторизация YummyAnime, избранное и пользовательские списки |
 | Desktop UX | Кэш изображений, тёмное окно, загрузочные экраны и фирменный установщик |
 
@@ -55,12 +56,24 @@ Android и Android TV.
 
 JVM поставляется вместе с desktop-дистрибутивом и отдельно пользователю не нужна.
 
+### Экспериментальная версия для Linux
+
+- Ubuntu 22.04/24.04 либо совместимый x64-дистрибутив;
+- пакет `.deb` или `.rpm` из артефактов GitVerse CI/CD;
+- подключение к интернету.
+
+При первом открытии плеера приложение загружает совместимый нативный пакет
+Chromium/JCEF в пользовательский кэш. До завершения загрузки отображается
+фирменный экран подготовки плеера.
+
 ## Структура проекта
 
 ```text
 desktopApp/
 ├─ installer/             # фирменная оболочка установщика
 ├─ src/main/kotlin/       # приложение, API, состояние и UI
+├─ src/windowsMain/       # DPAPI, пути и Windows-интеграция
+├─ src/linuxMain/         # Linux-пути, хранилище и JCEF-плеер
 ├─ src/main/resources/    # иконки и нативный WebView2 loader
 ├─ src/test/              # unit-тесты
 └─ tools/                 # сборочные инструменты Windows
@@ -79,6 +92,7 @@ third_party/              # тексты лицензий сторонних к�
 - Kotlin Coroutines и Serialization;
 - Coil 3 для изображений и дискового кэша;
 - JNA и Microsoft WebView2 для нативной интеграции с Windows;
+- JCEF Maven для экспериментального Linux-плеера;
 - Gradle Wrapper;
 - WiX/jpackage и собственная C#-оболочка установщика.
 
@@ -87,7 +101,8 @@ third_party/              # тексты лицензий сторонних к�
 - приложение не отправляет учётные данные на собственный сервер Hoshira;
 - сетевые запросы аккаунта направляются непосредственно API-провайдеру;
 - пароль не сохраняется;
-- сессия защищается Windows DPAPI;
+- сессия защищается Windows DPAPI либо локальным AES-GCM-хранилищем Linux
+  с ключом, доступным только текущему пользователю;
 - секреты и signing-материалы исключены из Git.
 
 Если вы обнаружили уязвимость, не публикуйте чувствительные детали в открытом

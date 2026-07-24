@@ -1212,26 +1212,6 @@ private fun isKodikUrl(url: String): Boolean =
             host.endsWith(".kodikplayer.com", ignoreCase = true)
     }.getOrDefault(false)
 
-internal fun shouldBlockKodikRequest(url: String): Boolean {
-    val uri = runCatching { URI(url) }.getOrNull() ?: return false
-    val host = uri.host?.lowercase().orEmpty()
-    if (KODIK_BLOCKED_AD_HOSTS.any { blocked ->
-            host == blocked || host.endsWith(".$blocked")
-        }
-    ) {
-        return true
-    }
-
-    val pathAndQuery = buildString {
-        append(uri.rawPath.orEmpty())
-        uri.rawQuery?.let {
-            append('?')
-            append(it)
-        }
-    }.lowercase()
-    return KODIK_AD_URL_MARKERS.any(pathAndQuery::contains)
-}
-
 private fun String.redactedHostPath(): String =
     runCatching {
         URI(this).let { uri ->
@@ -1299,32 +1279,6 @@ private val PLAYER_LOADING_BACKGROUND = Color(0x09, 0x0A, 0x0C)
 private val PLAYER_LOADING_TRACK = Color(0xFF, 0x4D, 0x00, 52)
 private val PLAYER_LOADING_ACCENT = Color(0xFF, 0x4D, 0x00)
 private val PLAYER_LOADING_TEXT = Color(0xAA, 0xAE, 0xB6)
-
-private val KODIK_BLOCKED_AD_HOSTS = setOf(
-    "doubleclick.net",
-    "googlesyndication.com",
-    "googleadservices.com",
-    "adfox.ru",
-    "adriver.ru",
-    "yandexadexchange.net",
-    "an.yandex.ru",
-    "mytarget.ru",
-    "relap.io",
-    "buzzoola.com",
-    "between.digital",
-)
-
-private val KODIK_AD_URL_MARKERS = listOf(
-    "/ads/",
-    "/adv/",
-    "/advert/",
-    "/preroll/",
-    "vast?",
-    "vast/",
-    "vpaid",
-    "pre-roll",
-    "preroll",
-)
 
 private const val S_OK = 0
 private const val E_POINTER = -2147467261

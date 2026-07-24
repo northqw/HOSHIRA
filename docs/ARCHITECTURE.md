@@ -2,7 +2,8 @@
 
 ## Обзор
 
-Hoshira Desktop — Windows-приложение на Kotlin/JVM и Compose Multiplatform.
+Hoshira Desktop — кроссплатформенное приложение на Kotlin/JVM и Compose
+Multiplatform с основной Windows-версией и экспериментальной Linux-сборкой.
 Проект разделяет сетевой слой, доменное состояние, UI и платформенную
 интеграцию. Это сохраняет возможность позднее вынести переносимую логику в
 общие Kotlin Multiplatform-модули.
@@ -17,7 +18,7 @@ AppController ───────────────► AccountRepository
 ReleaseRepository ────────────────► YaniApi
    │
    ▼
-Native WebView2 player host ──────► external player pages
+Platform player host ─────────────► external player pages
 ```
 
 ## Основные слои
@@ -48,13 +49,22 @@ Compose-экраны, компоненты, тема, навигация и со
   элементы управления плеером;
 - C#-оболочка установщика упаковывает MSI, созданный jpackage/WiX.
 
+### Linux integration
+
+- `LinuxWindowStyle` задаёт фон и иконку окна без Win32-вызовов;
+- `LinuxJcefPlayerPanel` размещает Chromium/JCEF внутри AWT-контейнера;
+- конфигурация и кэш используют каталоги XDG;
+- сессия шифруется AES-GCM, а файл ключа ограничен правами текущего
+  пользователя;
+- GitVerse CI/CD собирает пакеты `.deb` и `.rpm` на Ubuntu runner.
+
 ## Безопасность
 
 - публичный application token может переопределяться через переменную
   `YANI_APPLICATION_TOKEN`;
 - приватный API-токен не поставляется с приложением;
 - пароль существует только во время запроса авторизации;
-- access token шифруется Windows DPAPI;
+- access token шифруется Windows DPAPI или платформенным Linux-хранилищем;
 - браузерные данные WebView2 хранятся в локальном профиле Hoshira.
 
 ## Направление развития

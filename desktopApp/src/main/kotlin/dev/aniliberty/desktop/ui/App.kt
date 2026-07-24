@@ -61,13 +61,13 @@ import coil3.memory.MemoryCache
 import dev.aniliberty.desktop.AppController
 import dev.aniliberty.desktop.AppRoute
 import dev.aniliberty.desktop.AccountState
+import dev.aniliberty.desktop.platformCacheDirectory
 import dev.aniliberty.desktop.data.AccountProfile
 import dev.aniliberty.desktop.data.ReleaseRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.net.URI
-import java.nio.file.Paths
 import okio.Path.Companion.toPath
 
 @Composable
@@ -288,11 +288,8 @@ fun HoshiraApp(
 }
 
 private fun hoshiraImageCachePath(): okio.Path {
-    val localDataDirectory = System.getenv("LOCALAPPDATA")
-        ?.takeIf(String::isNotBlank)
-        ?: System.getProperty("user.home")
-        ?: System.getProperty("java.io.tmpdir")
-    return Paths.get(localDataDirectory, "Hoshira", "cache", "images")
+    return platformCacheDirectory()
+        .resolve("images")
         .toString()
         .toPath()
 }
@@ -685,7 +682,7 @@ private fun AccountDialog(
                         )
                         Spacer(Modifier.height(14.dp))
                         Text(
-                            "Пароль не сохраняется. Токен сессии защищён средствами Windows.",
+                            "Пароль не сохраняется. Токен сессии хранится в защищённом виде.",
                             color = AniColors.TextMuted.copy(alpha = 0.72f),
                             style = MaterialTheme.typography.labelMedium,
                         )

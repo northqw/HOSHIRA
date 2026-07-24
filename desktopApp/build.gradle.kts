@@ -9,8 +9,33 @@ plugins {
 
 group = "dev.aniliberty.desktop"
 
+val hostOs = System.getProperty("os.name").lowercase()
+val targetOs = providers.gradleProperty("hoshira.targetOs")
+    .orElse(
+        when {
+            hostOs.contains("win") -> "windows"
+            hostOs.contains("linux") -> "linux"
+            hostOs.contains("mac") -> "macos"
+            else -> error("Unsupported desktop operating system: $hostOs")
+        },
+    )
+    .get()
+
 kotlin {
     jvmToolchain(21)
+    sourceSets.named("main") {
+        when (targetOs) {
+            "windows" -> kotlin.srcDir("src/windowsMain/kotlin")
+            "linux" -> {
+                kotlin.srcDir("src/linuxMain/kotlin")
+                kotlin.exclude(
+                    "dev/aniliberty/desktop/WindowsWindowStyle.kt",
+                    "dev/aniliberty/desktop/ui/NativeWebView2PlayerPanel.kt",
+                )
+            }
+            else -> error("Desktop target '$targetOs' is not configured yet")
+        }
+    }
 }
 
 dependencies {
@@ -21,8 +46,13 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
 
-    implementation("net.java.dev.jna:jna:5.6.0")
-    implementation("net.java.dev.jna:jna-platform:5.6.0")
+    if (targetOs == "windows") {
+        implementation("net.java.dev.jna:jna:5.6.0")
+        implementation("net.java.dev.jna:jna-platform:5.6.0")
+    }
+    if (targetOs == "linux") {
+        implementation("me.friwi:jcefmaven:146.0.10")
+    }
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
@@ -38,20 +68,41 @@ compose.desktop {
         // breaks both mechanisms, so desktop releases favor correctness here.
         buildTypes.release.proguard.isEnabled.set(false)
         nativeDistributions {
-            targetFormats(TargetFormat.Msi, TargetFormat.Exe)
+            when (targetOs) {
+                "windows" -> targetFormats(TargetFormat.Msi, TargetFormat.Exe)
+                "linux" -> targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
+            }
             packageName = "Hoshira"
             packageVersion = "0.2.4"
             description = "Hoshira — неофициальный desktop-клиент для просмотра аниме"
             vendor = "Hoshira Community"
-            modules("java.net.http", "jdk.crypto.ec")
+            modules(
+                "java.instrument",
+                "java.net.http",
+                "java.sql",
+                "jdk.crypto.ec",
+                "jdk.unsupported",
+            )
 
-            windows {
-                iconFile.set(project.file("src/main/resources/icons/hoshira.ico"))
-                shortcut = true
-                menu = true
-                menuGroup = "Hoshira"
-                dirChooser = true
-                upgradeUuid = "6a7125ad-4baa-4e21-b9a1-32a664ccf60c"
+            if (targetOs == "windows") {
+                windows {
+                    iconFile.set(project.file("src/main/resources/icons/hoshira.ico"))
+                    shortcut = true
+                    menu = true
+                    menuGroup = "Hoshira"
+                    dirChooser = true
+                    upgradeUuid = "6a7125ad-4baa-4e21-b9a1-32a664ccf60c"
+                }
+            }
+            if (targetOs == "linux") {
+                linux {
+                    iconFile.set(project.file("src/main/resources/icons/hoshira.png"))
+                    packageName = "hoshira"
+                    debMaintainer = "northqw@users.noreply.gitverse.ru"
+                    menuGroup = "AudioVideo"
+                    appCategory = "video"
+                    rpmLicenseType = "Proprietary"
+                }
             }
         }
     }

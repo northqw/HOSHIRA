@@ -1,6 +1,5 @@
 package dev.aniliberty.desktop.data
 
-import com.sun.jna.platform.win32.Crypt32Util
 import dev.aniliberty.desktop.model.ReleaseDto
 import dev.aniliberty.desktop.model.asAbsoluteYaniUrl
 import java.nio.charset.StandardCharsets
@@ -233,7 +232,7 @@ internal class AccountSessionStore(
         if (!Files.isRegularFile(sessionFile)) return@withContext null
         runCatching {
             val encrypted = Files.readAllBytes(sessionFile)
-            val decrypted = Crypt32Util.cryptUnprotectData(encrypted)
+            val decrypted = platformUnprotectSession(encrypted)
             json.decodeFromString<StoredAccountSession>(
                 decrypted.toString(StandardCharsets.UTF_8),
             )
@@ -246,7 +245,7 @@ internal class AccountSessionStore(
     suspend fun save(session: StoredAccountSession) = withContext(Dispatchers.IO) {
         Files.createDirectories(sessionFile.parent)
         val payload = json.encodeToString(session).toByteArray(StandardCharsets.UTF_8)
-        val encrypted = Crypt32Util.cryptProtectData(payload)
+        val encrypted = platformProtectSession(payload)
         val temporaryFile = sessionFile.resolveSibling("${sessionFile.fileName}.tmp")
         Files.write(temporaryFile, encrypted)
         try {
@@ -310,10 +309,9 @@ private fun YaniUserListAnimeDto.toAnimeDto(): YaniAnimeDto =
     )
 
 private fun defaultSessionFile(): Path {
-    val localData = System.getenv("LOCALAPPDATA")
-        ?.takeIf(String::isNotBlank)
-        ?: System.getProperty("user.home")
-    return Path.of(localData, "Hoshira", "account", "session.bin")
+    return platformConfigDirectory()
+        .resolve("account")
+        .resolve("session.bin")
 }
 
 private const val TOKEN_REFRESH_INTERVAL_SECONDS = 2L * 24L * 60L * 60L

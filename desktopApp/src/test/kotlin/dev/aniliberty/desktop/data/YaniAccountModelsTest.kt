@@ -63,7 +63,7 @@ class YaniAccountModelsTest {
     }
 
     @Test
-    fun `Windows session store encrypts token at rest`() = runBlocking {
+    fun `platform session store encrypts token at rest`() = runBlocking {
         val directory = Files.createTempDirectory("hoshira-account-test")
         val file = directory.resolve("session.bin")
         val store = AccountSessionStore(file)
