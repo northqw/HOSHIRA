@@ -1,6 +1,7 @@
 package dev.aniliberty.desktop.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
@@ -10,7 +11,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import dev.aniliberty.desktop.desktopapp.generated.resources.Res
-import dev.aniliberty.desktop.desktopapp.generated.resources.inter_variable
 import dev.aniliberty.desktop.desktopapp.generated.resources.montserrat_variable
 import org.jetbrains.compose.resources.Font
 
@@ -47,39 +47,47 @@ private val AniColorScheme = darkColorScheme(
 
 @Composable
 private fun aniTypography(): Typography {
-    val inter = FontFamily(
-        Font(Res.font.inter_variable, FontWeight.Normal),
-        Font(Res.font.inter_variable, FontWeight.Medium),
-        Font(Res.font.inter_variable, FontWeight.SemiBold),
-        Font(Res.font.inter_variable, FontWeight.Bold),
-    )
     val montserrat = FontFamily(
         Font(Res.font.montserrat_variable, FontWeight.Medium),
         Font(Res.font.montserrat_variable, FontWeight.SemiBold),
         Font(Res.font.montserrat_variable, FontWeight.Bold),
+        Font(Res.font.montserrat_variable, FontWeight.ExtraBold),
     )
+    val defaults = Typography()
 
     return Typography(
         displayLarge = TextStyle(
             fontFamily = montserrat,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.ExtraBold,
             fontSize = 52.sp,
             lineHeight = 60.sp,
             letterSpacing = (-1.05).sp,
         ),
+        displayMedium = defaults.displayMedium.copy(
+            fontFamily = montserrat,
+            fontWeight = FontWeight.ExtraBold,
+        ),
+        displaySmall = defaults.displaySmall.copy(
+            fontFamily = montserrat,
+            fontWeight = FontWeight.ExtraBold,
+        ),
         headlineLarge = TextStyle(
             fontFamily = montserrat,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.ExtraBold,
             fontSize = 32.sp,
             lineHeight = 40.sp,
             letterSpacing = (-0.45).sp,
         ),
         headlineMedium = TextStyle(
             fontFamily = montserrat,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             fontSize = 23.sp,
             lineHeight = 31.sp,
             letterSpacing = (-0.2).sp,
+        ),
+        headlineSmall = defaults.headlineSmall.copy(
+            fontFamily = montserrat,
+            fontWeight = FontWeight.Bold,
         ),
         titleLarge = TextStyle(
             fontFamily = montserrat,
@@ -88,37 +96,45 @@ private fun aniTypography(): Typography {
             lineHeight = 27.sp,
         ),
         titleMedium = TextStyle(
-            fontFamily = inter,
+            fontFamily = montserrat,
             fontWeight = FontWeight.SemiBold,
             fontSize = 16.sp,
             lineHeight = 23.sp,
         ),
+        titleSmall = defaults.titleSmall.copy(
+            fontFamily = montserrat,
+            fontWeight = FontWeight.SemiBold,
+        ),
         bodyLarge = TextStyle(
-            fontFamily = inter,
-            fontWeight = FontWeight.Normal,
+            fontFamily = montserrat,
+            fontWeight = FontWeight.Medium,
             fontSize = 16.sp,
             lineHeight = 27.sp,
         ),
         bodyMedium = TextStyle(
-            fontFamily = inter,
-            fontWeight = FontWeight.Normal,
+            fontFamily = montserrat,
+            fontWeight = FontWeight.Medium,
             fontSize = 14.sp,
             lineHeight = 22.sp,
         ),
+        bodySmall = defaults.bodySmall.copy(
+            fontFamily = montserrat,
+            fontWeight = FontWeight.Medium,
+        ),
         labelLarge = TextStyle(
-            fontFamily = inter,
+            fontFamily = montserrat,
             fontWeight = FontWeight.SemiBold,
             fontSize = 14.sp,
             lineHeight = 20.sp,
         ),
         labelMedium = TextStyle(
-            fontFamily = inter,
-            fontWeight = FontWeight.Medium,
+            fontFamily = montserrat,
+            fontWeight = FontWeight.SemiBold,
             fontSize = 12.sp,
             lineHeight = 18.sp,
         ),
         labelSmall = TextStyle(
-            fontFamily = inter,
+            fontFamily = montserrat,
             fontWeight = FontWeight.SemiBold,
             fontSize = 11.sp,
             lineHeight = 16.sp,
@@ -131,6 +147,10 @@ fun HoshiraTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = AniColorScheme,
         typography = aniTypography(),
-        content = content,
-    )
+    ) {
+        ProvideTextStyle(
+            value = MaterialTheme.typography.bodyMedium,
+            content = content,
+        )
+    }
 }
