@@ -78,7 +78,7 @@ compose.desktop {
                 "linux" -> targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
             }
             packageName = "Hoshira"
-            packageVersion = "0.2.5"
+            packageVersion = "0.2.6"
             description = "Hoshira — неофициальный desktop-клиент для просмотра аниме"
             vendor = "Hoshira Community"
             modules(

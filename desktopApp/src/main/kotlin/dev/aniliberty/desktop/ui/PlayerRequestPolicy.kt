@@ -19,8 +19,41 @@ internal fun shouldBlockKodikRequest(url: String): Boolean {
             append(it)
         }
     }.lowercase()
+    val isKodikFirstParty =
+        host == "kodikplayer.com" || host.endsWith(".kodikplayer.com")
+    if (
+        isKodikFirstParty &&
+        pathAndQuery.contains("/preroll/") &&
+        pathAndQuery.substringBefore('?').endsWith("/config.json")
+    ) {
+        // Kodik needs this small first-party manifest to finish initializing
+        // its playback state. Blocking it makes the provider wait for a retry
+        // timeout before it creates the actual <video>.
+        return false
+    }
     return KODIK_AD_URL_MARKERS.any(pathAndQuery::contains)
 }
+
+internal val KODIK_WEB_RESOURCE_FILTERS = listOf(
+    "*doubleclick.net/*",
+    "*googlesyndication.com/*",
+    "*googleadservices.com/*",
+    "*adfox.ru/*",
+    "*adriver.ru/*",
+    "*yandexadexchange.net/*",
+    "*an.yandex.ru/*",
+    "*mytarget.ru/*",
+    "*relap.io/*",
+    "*buzzoola.com/*",
+    "*between.digital/*",
+    "*/*ads/*",
+    "*/*adv/*",
+    "*/*advert/*",
+    "*/*preroll/*",
+    "*vpaid*",
+    "*pre-roll*",
+    "*vast*",
+)
 
 private val KODIK_BLOCKED_AD_HOSTS = setOf(
     "doubleclick.net",

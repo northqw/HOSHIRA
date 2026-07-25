@@ -179,6 +179,12 @@ internal class NativeWebView2PlayerPanel(
         }
     }
 
+    fun setFullscreenState(fullscreen: Boolean) {
+        runOnAwt {
+            host?.setFullscreenState(fullscreen)
+        }
+    }
+
     private fun startHost() {
         notifyState(EmbeddedPlayerState.Starting)
         runCatching {
@@ -361,6 +367,18 @@ private class WindowsWebView2Host(
         post {
             if (hostInstalled) {
                 executeScript("window.hoshiraActivity && window.hoshiraActivity();")
+            }
+        }
+    }
+
+    fun setFullscreenState(fullscreen: Boolean) {
+        if (closed.get()) return
+        post {
+            if (hostInstalled) {
+                executeScript(
+                    "window.hoshiraSetFullscreenState && " +
+                        "window.hoshiraSetFullscreenState($fullscreen);",
+                )
             }
         }
     }
@@ -690,12 +708,14 @@ private class WindowsWebView2Host(
             S_OK
         }
 
-        val resourceFilterResult = currentWebView.call(
-            CORE_WEBVIEW2_ADD_WEB_RESOURCE_REQUESTED_FILTER,
-            WString("*"),
-            CORE_WEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-        )
-        if (resourceFilterResult >= 0) {
+        val installedResourceFilters = KODIK_WEB_RESOURCE_FILTERS.count { pattern ->
+            currentWebView.call(
+                CORE_WEBVIEW2_ADD_WEB_RESOURCE_REQUESTED_FILTER,
+                WString(pattern),
+                CORE_WEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+            ) >= 0
+        }
+        if (installedResourceFilters > 0) {
             addEventHandler(
                 currentWebView,
                 CORE_WEBVIEW2_ADD_WEB_RESOURCE_REQUESTED,
@@ -708,7 +728,7 @@ private class WindowsWebView2Host(
             }
         } else {
             webView2Log(
-                "ad request filter unavailable (${resourceFilterResult.toHexHResult()})",
+                "Kodik ad request filters unavailable",
             )
         }
 
@@ -966,6 +986,8 @@ private class WindowsWebView2Host(
             "back" -> onAction(EmbeddedPlayerAction.Back)
             "previous" -> onAction(EmbeddedPlayerAction.Previous)
             "next" -> onAction(EmbeddedPlayerAction.Next)
+            "fullscreen:true" -> onAction(EmbeddedPlayerAction.SetFullscreen(true))
+            "fullscreen:false" -> onAction(EmbeddedPlayerAction.SetFullscreen(false))
             else -> message
                 .removePrefix("source:")
                 .takeIf { sourceId ->

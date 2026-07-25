@@ -28,6 +28,7 @@ internal sealed interface EmbeddedPlayerAction {
     data object Back : EmbeddedPlayerAction
     data object Previous : EmbeddedPlayerAction
     data object Next : EmbeddedPlayerAction
+    data class SetFullscreen(val fullscreen: Boolean) : EmbeddedPlayerAction
     data class SelectSource(val episodeId: String) : EmbeddedPlayerAction
 }
 
@@ -510,7 +511,11 @@ internal fun playerHostScript(
                   <button class="action source-toggle" id="source-toggle">
                     <span class="source-caption">Источник</span>
                     <span>${selected.label.escapeHtml()}</span>
-                    <span class="source-chevron">⌄</span>
+                    <span class="source-chevron" aria-hidden="true">
+                      <svg viewBox="0 0 18 18">
+                        <path d="M4 6.5 9 11l5-4.5"></path>
+                      </svg>
+                    </span>
                   </button>
                   <div class="source-menu" id="source-menu">
                     <div class="source-menu-title">Выберите плеер</div>
@@ -541,7 +546,8 @@ internal fun playerHostScript(
           </button>
           <div class="loading-content">
             <div class="loading-spinner"></div>
-            <div class="loading-label">Загружаем плеер…</div>
+            <div class="loading-label" id="loading-label">Загружаем плеер…</div>
+            <div class="loading-note" id="loading-note"></div>
           </div>
         </div>
         <div class="chrome">
@@ -666,7 +672,11 @@ internal fun playerHostScript(
                     disabled
                   >
                     <span id="quality-label">Авто</span>
-                    <span class="quality-chevron">⌃</span>
+                    <span class="quality-chevron" aria-hidden="true">
+                      <svg viewBox="0 0 18 18">
+                        <path d="M4 6.5 9 11l5-4.5"></path>
+                      </svg>
+                    </span>
                   </button>
                   <div class="quality-menu" id="quality-menu">
                     <div class="quality-menu-title">Качество видео</div>
@@ -729,7 +739,7 @@ internal fun playerHostScript(
     val css = """
         :root {
           color-scheme: dark;
-          font-family: Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
+          font-family: "Montserrat", "Segoe UI Variable Display", "Segoe UI", sans-serif;
         }
         html, body {
           width: 100%;
@@ -795,6 +805,7 @@ internal fun playerHostScript(
           display: flex;
           align-items: center;
           flex-direction: column;
+          max-width: min(460px, calc(100vw - 48px));
         }
         .loading-spinner {
           width: 38px;
@@ -807,9 +818,22 @@ internal fun playerHostScript(
           animation: hoshira-loading-spin 0.9s linear infinite;
         }
         .loading-label {
-          color: #aaaeb6;
+          color: #e5e7eb;
           font-size: 16px;
-          font-weight: 400;
+          font-weight: 650;
+          text-align: center;
+        }
+        .loading-note {
+          display: none;
+          margin-top: 10px;
+          color: #7f858f;
+          font-size: 13px;
+          font-weight: 450;
+          line-height: 1.5;
+          text-align: center;
+        }
+        .loading-note.is-visible {
+          display: block;
         }
         @keyframes hoshira-loading-spin {
           to { transform: rotate(360deg); }
@@ -966,10 +990,25 @@ internal fun playerHostScript(
           text-transform: uppercase;
         }
         .source-chevron {
+          display: inline-grid;
+          width: 18px;
+          height: 18px;
+          place-items: center;
           margin-left: 2px;
-          color: #ff8a24;
-          font-size: 16px;
+          color: rgba(255, 255, 255, 0.72);
           transition: transform 160ms ease;
+        }
+        .source-chevron svg,
+        .quality-chevron svg {
+          display: block;
+          width: 18px;
+          height: 18px;
+          overflow: visible;
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 1.8;
+          stroke-linecap: round;
+          stroke-linejoin: round;
         }
         .source-picker.open .source-chevron {
           transform: rotate(180deg);
@@ -1079,8 +1118,11 @@ internal fun playerHostScript(
           opacity: 0.42;
         }
         .quality-chevron {
-          color: rgba(255, 255, 255, 0.58);
-          font-size: 14px;
+          display: inline-grid;
+          width: 18px;
+          height: 18px;
+          place-items: center;
+          color: rgba(255, 255, 255, 0.66);
           transition: transform 160ms ease;
         }
         .quality-picker.open .quality-chevron {
@@ -1335,7 +1377,7 @@ internal fun playerHostScript(
         }
         .player-button svg text {
           fill: currentColor;
-          font-family: Inter, "Segoe UI", sans-serif;
+          font-family: "Montserrat", "Segoe UI Variable", "Segoe UI", sans-serif;
           font-size: 6px;
           font-weight: 850;
         }
@@ -1360,10 +1402,10 @@ internal fun playerHostScript(
           align-items: center;
           gap: 6px;
           padding-left: 6px;
-          color: rgba(247, 247, 250, 0.88);
+          color: rgba(250, 250, 252, 0.94);
           font-size: 13px;
           font-variant-numeric: tabular-nums;
-          font-weight: 650;
+          font-weight: 750;
           white-space: nowrap;
           text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
         }
@@ -1513,6 +1555,8 @@ internal fun playerHostScript(
           document.body.innerHTML = decode("$encodedMarkup");
           const iframe = document.getElementById('hoshira-player');
           const playerLoading = document.getElementById('player-loading');
+          const loadingLabel = document.getElementById('loading-label');
+          const loadingNote = document.getElementById('loading-note');
           const chrome = document.querySelector('.chrome');
           const playerStatus = document.getElementById('player-status');
           const playToggle = document.getElementById('play-toggle');
@@ -1530,15 +1574,25 @@ internal fun playerHostScript(
           const qualityLabel = document.getElementById('quality-label');
           const qualityOptions = document.getElementById('quality-options');
 
+          if (isKodikProvider) {
+            loadingLabel.textContent = 'Запускаем Kodik…';
+            loadingNote.textContent =
+              'Загрузка может занять больше времени из-за обхода встроенной рекламы в плеере.';
+            loadingNote.classList.add('is-visible');
+          }
+
           let chromeHideTimer = 0;
           let activeVideo = null;
           let videoListeners = [];
           let qualityEntries = [];
           let qualitySignature = '';
           let lastProviderRoots = [];
+          let providerRootsDirty = true;
+          let lastRootRefreshAt = 0;
           let scrubbing = false;
           let lastAudibleVolume = 1;
           let scanScheduled = false;
+          let startupScanTimer = 0;
           const observedDocuments = new WeakSet();
           const activityDocuments = new WeakSet();
           const wiredFrames = new WeakSet();
@@ -1625,6 +1679,18 @@ internal fun playerHostScript(
           document.addEventListener('mousemove', scheduleChromeHide, { passive: true });
           document.addEventListener('mousedown', scheduleChromeHide, { passive: true });
 
+          const postHostAction = action => {
+            if (window.chrome?.webview) {
+              window.chrome.webview.postMessage(action);
+              return true;
+            }
+            if (window.hoshiraNative) {
+              window.hoshiraNative(action);
+              return true;
+            }
+            return false;
+          };
+
           document.querySelectorAll('[data-action]').forEach(button => {
             button.addEventListener('click', event => {
               event.preventDefault();
@@ -1638,11 +1704,7 @@ internal fun playerHostScript(
               ) {
                 showPlayerLoading();
               }
-              if (window.chrome?.webview) {
-                window.chrome.webview.postMessage(action);
-              } else if (window.hoshiraNative) {
-                window.hoshiraNative(action);
-              }
+              postHostAction(action);
               document.querySelector('.source-picker')?.classList.remove('open');
               qualityPicker?.classList.remove('open');
             });
@@ -2011,7 +2073,24 @@ internal fun playerHostScript(
             scheduleChromeHide();
           };
 
+          const setFullscreenState = fullscreen => {
+            const active = Boolean(fullscreen);
+            fullscreenToggle.classList.toggle('is-fullscreen', active);
+            fullscreenToggle.setAttribute(
+              'aria-label',
+              active ? 'Выйти из полноэкранного режима' : 'На весь экран'
+            );
+            fullscreenToggle.setAttribute('aria-pressed', active ? 'true' : 'false');
+          };
+          window.hoshiraSetFullscreenState = setFullscreenState;
+
           const toggleFullscreen = async () => {
+            const requestedState = !fullscreenToggle.classList.contains('is-fullscreen');
+            if (postHostAction('fullscreen:' + requestedState)) {
+              setFullscreenState(requestedState);
+              scheduleChromeHide();
+              return;
+            }
             try {
               if (document.fullscreenElement) {
                 await document.exitFullscreen();
@@ -2074,11 +2153,7 @@ internal fun playerHostScript(
           });
 
           document.addEventListener('fullscreenchange', () => {
-            fullscreenToggle.classList.toggle('is-fullscreen', Boolean(document.fullscreenElement));
-            fullscreenToggle.setAttribute(
-              'aria-label',
-              document.fullscreenElement ? 'Выйти из полноэкранного режима' : 'На весь экран'
-            );
+            setFullscreenState(Boolean(document.fullscreenElement));
             scheduleChromeHide();
           });
 
@@ -2116,6 +2191,16 @@ internal fun playerHostScript(
           const handlePlayerKey = event => {
             const target = event.target;
             const tagName = target?.tagName?.toLowerCase();
+            if (
+              event.code === 'Escape' &&
+              fullscreenToggle.classList.contains('is-fullscreen')
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              toggleFullscreen();
+              scheduleChromeHide();
+              return;
+            }
             if (tagName === 'input' || tagName === 'button' || target?.isContentEditable) return;
             switch (event.code) {
               case 'Space':
@@ -2168,7 +2253,10 @@ internal fun playerHostScript(
           const wireFrame = frame => {
             if (!frame || wiredFrames.has(frame)) return;
             wiredFrames.add(frame);
-            frame.addEventListener('load', scheduleScan);
+            frame.addEventListener('load', () => {
+              providerRootsDirty = true;
+              scheduleScan();
+            });
           };
 
           const observeProviderRoot = root => {
@@ -2177,7 +2265,15 @@ internal fun playerHostScript(
               : root;
             if (!observedNode || observedDocuments.has(root)) return;
             observedDocuments.add(root);
-            const observer = new MutationObserver(scheduleScan);
+            const observer = new MutationObserver(() => {
+              if (activeVideo?.isConnected) {
+                activeVideo.controls = false;
+                activeVideo.removeAttribute('controls');
+                return;
+              }
+              providerRootsDirty = true;
+              scheduleScan();
+            });
             observer.observe(observedNode, {
               childList: true,
               subtree: true,
@@ -2243,6 +2339,10 @@ internal fun playerHostScript(
             activeVideo.playsInline = true;
             activeVideo.setAttribute('playsinline', '');
             lastAudibleVolume = activeVideo.volume > 0.001 ? activeVideo.volume : lastAudibleVolume;
+            if (startupScanTimer) {
+              window.clearInterval(startupScanTimer);
+              startupScanTimer = 0;
+            }
             hidePlayerLoading();
 
             const listen = (name, listener) => {
@@ -2274,15 +2374,24 @@ internal fun playerHostScript(
 
           function scanForVideo() {
             scanScheduled = false;
-            const roots = [];
-            try {
-              collectAccessibleRoots(iframe.contentDocument, roots);
-            } catch (_) {
-              showPlayerStatus('Ожидание интерфейса источника…');
-              return;
+            const now = performance.now();
+            let roots = lastProviderRoots;
+            if (
+              roots.length === 0 ||
+              (providerRootsDirty && now - lastRootRefreshAt >= 420)
+            ) {
+              const refreshedRoots = [];
+              try {
+                collectAccessibleRoots(iframe.contentDocument, refreshedRoots);
+              } catch (_) {
+                hidePlayerStatus();
+                return;
+              }
+              roots = refreshedRoots;
+              lastProviderRoots = refreshedRoots;
+              providerRootsDirty = false;
+              lastRootRefreshAt = now;
             }
-            lastProviderRoots = roots;
-            discoverQualityOptions(roots);
 
             const candidates = roots
               .flatMap(root => Array.from(root.querySelectorAll('video')))
@@ -2296,7 +2405,7 @@ internal fun playerHostScript(
               clearVideoListeners();
               activeVideo = null;
               setControlAvailability(false);
-              showPlayerStatus('Ожидание видео от источника…');
+              hidePlayerStatus();
               updateVideoState();
             }
           }
@@ -2308,14 +2417,31 @@ internal fun playerHostScript(
           }
 
           document.addEventListener('keydown', handlePlayerKey);
-          iframe.addEventListener('load', scheduleScan);
-          window.setInterval(scheduleScan, 1000);
+          iframe.addEventListener('load', () => {
+            providerRootsDirty = true;
+            scheduleScan();
+          });
+          startupScanTimer = window.setInterval(scheduleScan, 160);
+          window.setTimeout(() => {
+            if (startupScanTimer) {
+              window.clearInterval(startupScanTimer);
+              startupScanTimer = 0;
+            }
+          }, 5000);
+          window.setInterval(() => {
+            if (!activeVideo?.isConnected) {
+              scheduleScan();
+              return;
+            }
+            activeVideo.controls = false;
+            activeVideo.removeAttribute('controls');
+          }, 1500);
           window.setTimeout(() => {
             hidePlayerLoading();
-            if (!activeVideo) {
+            if (!activeVideo && !isKodikProvider) {
               showPlayerStatus('Источник загружается дольше обычного…');
             }
-          }, 12000);
+          }, isKodikProvider ? 3000 : 6000);
           setControlAvailability(false);
           setRangeProgress(seekRange, 0);
           setRangeProgress(volumeRange, 1);

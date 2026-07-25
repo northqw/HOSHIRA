@@ -49,6 +49,7 @@ class AppController(
     private val accountRepository: AccountRepository = NetworkAccountRepository(),
 ) {
     private var homeLoading = false
+    private var routeBeforeSearch: AppRoute = AppRoute.Home
 
     var route: AppRoute by mutableStateOf(AppRoute.Home)
         private set
@@ -236,8 +237,11 @@ class AppController(
     }
 
     fun updateSearchQuery(value: String) {
+        if (value.isNotBlank() && route != AppRoute.Search) {
+            routeBeforeSearch = route
+        }
         searchQuery = value
-        route = if (value.isBlank()) AppRoute.Catalog else AppRoute.Search
+        route = if (value.isBlank()) routeBeforeSearch else AppRoute.Search
     }
 
     fun updateCatalogFilters(value: CatalogFilters) {

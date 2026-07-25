@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +36,8 @@ fun PlayerScreen(
     session: PlaybackSession?,
     onBack: () -> Unit,
     onPlayEpisode: (EpisodeDto) -> Unit,
+    isFullscreen: Boolean,
+    onFullscreenChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val playerPageUrl = session?.episode?.externalPlayerUrl
@@ -107,11 +110,15 @@ fun PlayerScreen(
     val playerPanel = remember {
         AtomicReference<NativeWebView2PlayerPanel?>()
     }
+    val currentFullscreen by rememberUpdatedState(isFullscreen)
+    val currentFullscreenCallback by rememberUpdatedState(onFullscreenChange)
     val onPlayerAction: (EmbeddedPlayerAction) -> Unit = { action ->
         when (action) {
             EmbeddedPlayerAction.Back -> onBack()
             EmbeddedPlayerAction.Previous -> previousEpisode?.let(onPlayEpisode)
             EmbeddedPlayerAction.Next -> nextEpisode?.let(onPlayEpisode)
+            is EmbeddedPlayerAction.SetFullscreen ->
+                currentFullscreenCallback(action.fullscreen)
             is EmbeddedPlayerAction.SelectSource -> sourceCandidates
                 .firstOrNull { it.id == action.episodeId }
                 ?.let(onPlayEpisode)
@@ -127,7 +134,15 @@ fun PlayerScreen(
     }
     DisposableEffect(Unit) {
         onDispose {
+            if (currentFullscreen) {
+                currentFullscreenCallback(false)
+            }
             playerPanel.getAndSet(null)?.disposePlayer()
+        }
+    }
+    LaunchedEffect(isFullscreen, mountNativePlayer) {
+        if (mountNativePlayer) {
+            playerPanel.get()?.setFullscreenState(isFullscreen)
         }
     }
 
@@ -198,11 +213,4 @@ fun PlayerScreen(
             }
         }
     }
-}
-
-private fun playerSourcePriority(name: String): Int = when {
-    name.contains("Kodik", ignoreCase = true) -> 0
-    name.contains("Alloha", ignoreCase = true) -> 1
-    name.contains("Sibnet", ignoreCase = true) -> 2
-    else -> 3
 }

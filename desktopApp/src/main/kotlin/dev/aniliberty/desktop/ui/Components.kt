@@ -59,6 +59,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.aniliberty.desktop.data.AnimeListKind
 import coil3.compose.AsyncImage
 import dev.aniliberty.desktop.data.CatalogFilters
@@ -160,7 +161,14 @@ fun SecondaryAction(
         horizontalArrangement = Arrangement.Center,
     ) {
         if (leading != null) {
-            Text(leading, color = AniColors.Text, fontWeight = FontWeight.Bold)
+            if (leading == "♡" || leading == "♥") {
+                FavoriteHeartGlyph(
+                    filled = leading == "♥",
+                    modifier = Modifier.size(18.dp),
+                )
+            } else {
+                Text(leading, color = AniColors.Text, fontWeight = FontWeight.Bold)
+            }
             Spacer(Modifier.width(10.dp))
         }
         Text(
@@ -168,6 +176,77 @@ fun SecondaryAction(
             color = AniColors.Text,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun FavoriteHeartGlyph(
+    filled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier) {
+        val heart = Path().apply {
+            moveTo(size.width * 0.50f, size.height * 0.88f)
+            cubicTo(
+                size.width * 0.42f,
+                size.height * 0.78f,
+                size.width * 0.12f,
+                size.height * 0.60f,
+                size.width * 0.12f,
+                size.height * 0.34f,
+            )
+            cubicTo(
+                size.width * 0.12f,
+                size.height * 0.16f,
+                size.width * 0.27f,
+                size.height * 0.08f,
+                size.width * 0.40f,
+                size.height * 0.14f,
+            )
+            cubicTo(
+                size.width * 0.46f,
+                size.height * 0.17f,
+                size.width * 0.49f,
+                size.height * 0.22f,
+                size.width * 0.50f,
+                size.height * 0.26f,
+            )
+            cubicTo(
+                size.width * 0.51f,
+                size.height * 0.22f,
+                size.width * 0.54f,
+                size.height * 0.17f,
+                size.width * 0.60f,
+                size.height * 0.14f,
+            )
+            cubicTo(
+                size.width * 0.73f,
+                size.height * 0.08f,
+                size.width * 0.88f,
+                size.height * 0.16f,
+                size.width * 0.88f,
+                size.height * 0.34f,
+            )
+            cubicTo(
+                size.width * 0.88f,
+                size.height * 0.60f,
+                size.width * 0.58f,
+                size.height * 0.78f,
+                size.width * 0.50f,
+                size.height * 0.88f,
+            )
+            close()
+        }
+
+        drawPath(
+            path = heart,
+            color = AniColors.Text,
+            style = if (filled) {
+                androidx.compose.ui.graphics.drawscope.Fill
+            } else {
+                Stroke(width = 1.8.dp.toPx())
+            },
         )
     }
 }
@@ -309,11 +388,10 @@ fun DubbingDropdown(
                 )
                 Spacer(Modifier.width(14.dp))
             }
-            Text(
-                text = if (expanded) "⌃" else "⌄",
+            DropdownChevron(
+                expanded = expanded,
                 color = AniColors.OrangeBright,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.size(18.dp),
             )
         }
 
@@ -322,7 +400,14 @@ fun DubbingDropdown(
             onDismissRequest = { expanded = false },
             modifier = Modifier
                 .width(420.dp)
-                .background(AniColors.SurfaceHighest),
+                .clip(RoundedCornerShape(20.dp))
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(20.dp),
+                ),
+            shape = RoundedCornerShape(20.dp),
+            containerColor = AniColors.SurfaceHighest,
         ) {
             options.forEach { option ->
                 val isSelected = option.first == selected
@@ -402,11 +487,10 @@ fun AnimeListDropdown(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
             )
-            Text(
-                text = if (expanded) "⌃" else "⌄",
-                color = AniColors.OrangeBright,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.ExtraBold,
+            DropdownChevron(
+                expanded = expanded,
+                color = if (enabled) AniColors.OrangeBright else AniColors.TextMuted,
+                modifier = Modifier.size(18.dp),
             )
         }
 
@@ -415,7 +499,14 @@ fun AnimeListDropdown(
             onDismissRequest = { expanded = false },
             modifier = Modifier
                 .width(280.dp)
-                .background(AniColors.SurfaceHighest),
+                .clip(RoundedCornerShape(20.dp))
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(20.dp),
+                ),
+            shape = RoundedCornerShape(20.dp),
+            containerColor = AniColors.SurfaceHighest,
         ) {
             AnimeListKind.entries
                 .filterNot { it == AnimeListKind.Favorite }
@@ -612,10 +703,10 @@ private fun CatalogDropdown(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                if (expanded) "⌃" else "⌄",
+            DropdownChevron(
+                expanded = expanded,
                 color = AniColors.OrangeBright,
-                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.size(18.dp),
             )
         }
         DropdownMenu(
@@ -623,7 +714,14 @@ private fun CatalogDropdown(
             onDismissRequest = { expanded = false },
             modifier = Modifier
                 .width(width.dp)
-                .background(AniColors.SurfaceHighest),
+                .clip(RoundedCornerShape(20.dp))
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(20.dp),
+                ),
+            shape = RoundedCornerShape(20.dp),
+            containerColor = AniColors.SurfaceHighest,
         ) {
             options.forEach { option ->
                 val isSelected = option.value == selected
@@ -645,6 +743,52 @@ private fun CatalogDropdown(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun DropdownChevron(
+    expanded: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(durationMillis = 180),
+    )
+
+    Canvas(
+        modifier = modifier.graphicsLayer {
+            rotationZ = rotation
+        },
+    ) {
+        val strokeWidth = 1.8.dp.toPx()
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(
+                x = size.width * 0.24f,
+                y = size.height * 0.38f,
+            ),
+            end = androidx.compose.ui.geometry.Offset(
+                x = size.width * 0.50f,
+                y = size.height * 0.64f,
+            ),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(
+                x = size.width * 0.50f,
+                y = size.height * 0.64f,
+            ),
+            end = androidx.compose.ui.geometry.Offset(
+                x = size.width * 0.76f,
+                y = size.height * 0.38f,
+            ),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
     }
 }
 
@@ -763,6 +907,7 @@ fun PosterCard(
                 contentDescription = release.displayName,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.Medium,
             )
 
             Box(
@@ -841,6 +986,7 @@ fun RemoteImage(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
+    filterQuality: FilterQuality = FilterQuality.High,
 ) {
     Box(
         modifier = modifier.background(
@@ -856,7 +1002,7 @@ fun RemoteImage(
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = contentScale,
-                filterQuality = FilterQuality.High,
+                filterQuality = filterQuality,
             )
         } else {
             Text(
@@ -997,7 +1143,9 @@ fun BrandMark(modifier: Modifier = Modifier) {
         Text(
             "HOSHIRA",
             color = Color.White,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.headlineSmall.copy(
+                letterSpacing = 0.6.sp,
+            ),
             fontWeight = FontWeight.ExtraBold,
         )
     }

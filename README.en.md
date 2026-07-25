@@ -11,7 +11,7 @@
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.2.5-ff4e00?style=flat-square" alt="Version 0.2.5">
+    <img src="https://img.shields.io/badge/version-0.2.6-ff4e00?style=flat-square" alt="Version 0.2.6">
     <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
     <img src="https://img.shields.io/badge/Linux-experimental-111318?style=flat-square&logo=linux" alt="Linux experimental">
     <img src="https://img.shields.io/badge/Kotlin-2.3.20-7f52ff?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.3.20">
@@ -20,7 +20,10 @@
   </p>
 </div>
 
-![Hoshira home screen](docs/assets/hoshira-home.png)
+<p align="center">
+  <img src="docs/assets/hoshira-home.png" width="49%" alt="Hoshira home screen">
+  <img src="docs/assets/hoshira-details.png" width="49%" alt="Anime details in Hoshira">
+</p>
 
 ## Product overview
 

@@ -144,6 +144,15 @@ internal class NativeWebView2PlayerPanel(
         }
     }
 
+    fun setFullscreenState(fullscreen: Boolean) {
+        display?.postSafely {
+            browser?.takeUnless(Browser::isDisposed)?.execute(
+                "window.hoshiraSetFullscreenState && " +
+                    "window.hoshiraSetFullscreenState($fullscreen);",
+            )
+        }
+    }
+
     private fun startBrowser() {
         if (!started.compareAndSet(false, true)) return
         thread(name = "hoshira-linux-webkit", isDaemon = true) {
@@ -251,6 +260,8 @@ internal class NativeWebView2PlayerPanel(
             "back" -> notifyAction(EmbeddedPlayerAction.Back)
             "previous" -> notifyAction(EmbeddedPlayerAction.Previous)
             "next" -> notifyAction(EmbeddedPlayerAction.Next)
+            "fullscreen:true" -> notifyAction(EmbeddedPlayerAction.SetFullscreen(true))
+            "fullscreen:false" -> notifyAction(EmbeddedPlayerAction.SetFullscreen(false))
             else -> message
                 .removePrefix("source:")
                 .takeIf { message.startsWith("source:") && it.isNotBlank() }

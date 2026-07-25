@@ -1,10 +1,13 @@
 package dev.aniliberty.desktop.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,9 +45,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -52,6 +60,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import coil3.ImageLoader
@@ -64,15 +73,17 @@ import dev.aniliberty.desktop.AccountState
 import dev.aniliberty.desktop.platformCacheDirectory
 import dev.aniliberty.desktop.data.AccountProfile
 import dev.aniliberty.desktop.data.ReleaseRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.awt.Desktop
-import java.net.URI
 import okio.Path.Companion.toPath
 
 @Composable
 fun HoshiraApp(
     repository: ReleaseRepository,
+    isFullscreen: Boolean,
+    onFullscreenChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     setSingletonImageLoaderFactory { context ->
@@ -102,15 +113,20 @@ fun HoshiraApp(
         var showSplash by remember { mutableStateOf(true) }
 
         LaunchedEffect(Unit) {
-            controller.loadHome()
-            delay(700)
+            coroutineScope {
+                val minimumSplash = async { delay(MINIMUM_SPLASH_DURATION_MS) }
+                controller.loadHome()
+                minimumSplash.await()
+            }
             showSplash = false
         }
 
         LaunchedEffect(controller) {
             while (true) {
                 delay(HOME_REFRESH_INTERVAL_MS)
-                controller.refreshHome()
+                if (controller.route !is AppRoute.Player) {
+                    controller.refreshHome()
+                }
             }
         }
 
@@ -122,7 +138,7 @@ fun HoshiraApp(
             when (route) {
                 AppRoute.Catalog -> controller.loadCatalog()
                 AppRoute.Search -> {
-                    delay(380)
+                    delay(SEARCH_DEBOUNCE_MS)
                     controller.search()
                 }
                 AppRoute.Library -> Unit
@@ -221,6 +237,8 @@ fun HoshiraApp(
                     session = controller.playbackSession,
                     onBack = controller::closePlayer,
                     onPlayEpisode = controller::playEpisode,
+                    isFullscreen = isFullscreen,
+                    onFullscreenChange = onFullscreenChange,
                     modifier = Modifier.fillMaxSize(),
                 )
                 }
@@ -232,7 +250,6 @@ fun HoshiraApp(
                         onQueryChange = controller::updateSearchQuery,
                         onHome = controller::showHome,
                         onCatalog = controller::showCatalog,
-                        onSupport = ::openSupportPage,
                         accountProfile = accountProfile,
                         onAccount = {
                             if (accountProfile != null) {
@@ -308,13 +325,19 @@ private fun TopNavigation(
     onQueryChange: (String) -> Unit,
     onHome: () -> Unit,
     onCatalog: () -> Unit,
-    onSupport: () -> Unit,
     accountProfile: AccountProfile?,
     onAccount: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var entered by remember { mutableStateOf(false) }
+    var searchExpanded by remember { mutableStateOf(query.isNotBlank()) }
     LaunchedEffect(Unit) { entered = true }
+    LaunchedEffect(route, query) {
+        when {
+            query.isNotBlank() -> searchExpanded = true
+            route != AppRoute.Search -> searchExpanded = false
+        }
+    }
     val shadowAlpha by animateFloatAsState(
         targetValue = if (entered) 1f else 0f,
         animationSpec = tween(durationMillis = 650),
@@ -409,11 +432,6 @@ private fun TopNavigation(
                     selected = route == AppRoute.Catalog || route == AppRoute.Search,
                     onClick = onCatalog,
                 )
-                NavigationItem(
-                    text = "Поддержать проект",
-                    selected = false,
-                    onClick = onSupport,
-                )
             }
 
             Spacer(Modifier.width(if (availableWidth < 1180.dp) 8.dp else 14.dp))
@@ -421,7 +439,9 @@ private fun TopNavigation(
             SearchBox(
                 value = query,
                 onValueChange = onQueryChange,
-                modifier = Modifier.width(if (availableWidth < 1180.dp) 210.dp else 286.dp),
+                expanded = searchExpanded,
+                onExpandedChange = { searchExpanded = it },
+                expandedWidth = if (availableWidth < 1180.dp) 210.dp else 286.dp,
             )
         }
 
@@ -500,7 +520,7 @@ private fun NavigationItem(
         Text(
             text,
             color = if (selected) AniColors.Text else AniColors.TextMuted,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.copy(fontSize = 16.sp),
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
         )
         if (selected) {
@@ -524,44 +544,129 @@ private fun NavigationItem(
 private fun SearchBox(
     value: String,
     onValueChange: (String) -> Unit,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    expandedWidth: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
+    val focusRequester = remember { FocusRequester() }
+    val width by animateDpAsState(
+        targetValue = if (expanded) expandedWidth else 48.dp,
+        animationSpec = tween(durationMillis = 280),
+    )
+
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            focusRequester.requestFocus()
+        }
+    }
+
+    Row(
         modifier = modifier
+            .width(width)
             .height(48.dp)
             .clip(CircleShape)
             .background(Color(0xE008090B))
             .border(1.dp, Color.White.copy(alpha = 0.075f), CircleShape)
-            .padding(horizontal = 18.dp),
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium.copy(color = AniColors.Text),
-        cursorBrush = SolidColor(AniColors.OrangeBright),
-        decorationBox = { innerTextField ->
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                enabled = !expanded,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { onExpandedChange(true) },
+            )
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SearchGlyph(
+            modifier = Modifier.size(20.dp),
+            color = if (expanded) AniColors.Text else AniColors.TextMuted,
+        )
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(110)),
+        ) {
             Row(
-                Modifier.fillMaxSize(),
+                modifier = Modifier.width(expandedWidth - 48.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "⌕",
-                    color = AniColors.TextMuted,
-                    style = MaterialTheme.typography.titleLarge,
-                )
                 Spacer(Modifier.width(10.dp))
-                Box {
-                    if (value.isEmpty()) {
-                        Text(
-                            "Поиск…",
-                            color = AniColors.TextMuted,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    innerTextField()
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = AniColors.Text),
+                    cursorBrush = SolidColor(AniColors.OrangeBright),
+                    decorationBox = { innerTextField ->
+                        Box {
+                            if (value.isEmpty()) {
+                                Text(
+                                    "Поиск…",
+                                    color = AniColors.TextMuted,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                )
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {
+                                onValueChange("")
+                                onExpandedChange(false)
+                            },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "×",
+                        color = AniColors.TextMuted,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                 }
             }
-        },
-    )
+        }
+    }
+}
+
+@Composable
+private fun SearchGlyph(
+    modifier: Modifier = Modifier,
+    color: Color,
+) {
+    Canvas(modifier) {
+        val strokeWidth = 2.dp.toPx()
+        val radius = size.minDimension * 0.29f
+        val center = Offset(size.width * 0.42f, size.height * 0.42f)
+        drawCircle(
+            color = color,
+            radius = radius,
+            center = center,
+            style = Stroke(width = strokeWidth),
+        )
+        drawLine(
+            color = color,
+            start = Offset(
+                center.x + radius * 0.72f,
+                center.y + radius * 0.72f,
+            ),
+            end = Offset(size.width * 0.86f, size.height * 0.86f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+    }
 }
 
 @Composable
@@ -853,12 +958,6 @@ private fun AccountMetric(
     }
 }
 
-private fun openSupportPage() {
-    runCatching {
-        if (Desktop.isDesktopSupported()) {
-            Desktop.getDesktop().browse(URI.create("https://ru.yummyani.me/pages/want-to-help"))
-        }
-    }
-}
-
 private const val HOME_REFRESH_INTERVAL_MS = 10 * 60 * 1_000L
+private const val MINIMUM_SPLASH_DURATION_MS = 350L
+private const val SEARCH_DEBOUNCE_MS = 260L

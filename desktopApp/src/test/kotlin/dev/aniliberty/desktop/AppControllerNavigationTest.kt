@@ -63,6 +63,22 @@ class AppControllerNavigationTest {
     }
 
     @Test
+    fun `closing search returns to the screen where it was opened`() {
+        val controller = AppController(
+            repository = FakeReleaseRepository(release),
+            accountRepository = FakeAccountRepository(),
+        )
+
+        controller.updateSearchQuery("тест")
+        assertEquals(AppRoute.Search, controller.route)
+
+        controller.updateSearchQuery("")
+
+        assertEquals(AppRoute.Home, controller.route)
+        assertEquals("", controller.searchQuery)
+    }
+
+    @Test
     fun `background home refresh replaces data and keeps previous data on failure`() = runBlocking {
         val repository = FakeReleaseRepository(release)
         val controller = AppController(

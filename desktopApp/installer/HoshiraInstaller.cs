@@ -15,8 +15,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("Hoshira Community")]
 [assembly: AssemblyProduct("Hoshira Installer")]
 [assembly: AssemblyCopyright("Hoshira Community")]
-[assembly: AssemblyVersion("0.2.5.0")]
-[assembly: AssemblyFileVersion("0.2.5.0")]
+[assembly: AssemblyVersion("0.2.6.0")]
+[assembly: AssemblyFileVersion("0.2.6.0")]
 
 namespace Hoshira.Setup
 {
@@ -33,7 +33,7 @@ namespace Hoshira.Setup
 
     internal sealed class InstallerForm : Form
     {
-        private const string InstallerVersion = "0.2.5";
+        private const string InstallerVersion = "0.2.6";
         private const string PayloadResourceName = "Hoshira.Payload.msi";
         private const string SetupIconResourceName = "Hoshira.SetupIcon";
         private const string WebView2BootstrapperResourceName =

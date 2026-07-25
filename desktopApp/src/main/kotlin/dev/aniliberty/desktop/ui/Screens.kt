@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -976,13 +977,6 @@ private fun DetailsContent(
     }
 }
 
-private fun playerSourcePriority(name: String): Int = when {
-    name.contains("Kodik", ignoreCase = true) -> 0
-    name.contains("Alloha", ignoreCase = true) -> 1
-    name.contains("Sibnet", ignoreCase = true) -> 2
-    else -> 3
-}
-
 @Composable
 private fun EpisodeCard(
     episode: EpisodeDto,
@@ -1001,6 +995,7 @@ private fun EpisodeCard(
                 contentDescription = episode.title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.Medium,
             )
         }
         Spacer(Modifier.height(15.dp))
