@@ -1,0 +1,49 @@
+name: Mirror to GitHub
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "*"
+    tags:
+      - "*"
+
+jobs:
+  mirror:
+    runs-on: ubuntu-cloud-runner
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror branches and tags
+        env:
+          GH_MIRROR_ACTOR: ${{ secrets.GH_MIRROR_ACTOR }}
+          GH_MIRROR_REPO: ${{ secrets.GH_MIRROR_REPO }}
+          GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_MIRROR_ACTOR}" || -z "${GH_MIRROR_REPO}" || -z "${GH_MIRROR_TOKEN}" ]]; then
+            echo "::notice::GitHub mirror is not configured yet; add GH_MIRROR_ACTOR, GH_MIRROR_REPO and GH_MIRROR_TOKEN secrets."
+            exit 0
+          fi
+
+          target_url="https://github.com/${GH_MIRROR_ACTOR}/${GH_MIRROR_REPO}.git"
+          basic_auth="$(printf '%s:%s' "${GH_MIRROR_ACTOR}" "${GH_MIRROR_TOKEN}" | base64 -w0)"
+
+          git fetch --force --prune origin \
+            '+refs/heads/*:refs/remotes/origin/*' \
+            '+refs/tags/*:refs/tags/*'
+
+          git -c "http.extraHeader=Authorization: Basic ${basic_auth}" \
+            push --force --prune "${target_url}" \
+            'refs/remotes/origin/*:refs/heads/*'
+
+          git -c "http.extraHeader=Authorization: Basic ${basic_auth}" \
+            push --force --prune "${target_url}" \
+            'refs/tags/*:refs/tags/*'
