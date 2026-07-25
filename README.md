@@ -22,7 +22,6 @@
 
 <p align="center">
   <img src="docs/assets/hoshira-home.png" width="49%" alt="Главный экран Hoshira">
-  <img src="docs/assets/hoshira-details.png" width="49%" alt="Страница аниме в Hoshira">
 </p>
 
 ## О продукте
