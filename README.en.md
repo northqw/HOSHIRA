@@ -21,8 +21,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/hoshira-home.png" width="49%" alt="Hoshira home screen">
-  <img src="docs/assets/hoshira-details.png" width="49%" alt="Anime details in Hoshira">
+  <img src="docs/assets/hoshira-home.png" width="100%" alt="Hoshira home screen">
 </p>
 
 ## Product overview

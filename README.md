@@ -21,7 +21,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/hoshira-home.png" width="49%" alt="Главный экран Hoshira">
+  <img src="docs/assets/hoshira-home.png" width="100%" alt="Главный экран Hoshira">
 </p>
 
 ## О продукте
