@@ -159,7 +159,7 @@ private fun HomeContent(
             item {
                 ReleaseRail(
                     title = "Откройте что-то новое",
-                    subtitle = "Случайная подборка из большого каталога",
+                    subtitle = "Рекомендации из каталога",
                     releases = feed.discoveries,
                     onOpenRelease = onOpenRelease,
                 )

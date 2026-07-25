@@ -69,10 +69,7 @@ class NetworkReleaseRepository(
             }.awaitAll()
         }
         val featuredIds = featured.mapTo(mutableSetOf(), ReleaseDto::id)
-        val discoveries = (carousel + feed.announcements)
-            .distinctBy { it.animeId }
-            .filterNot { it.animeId in featuredIds }
-            .take(16)
+        val discoveries = feed.discoverySources(featuredIds)
             .map(YaniAnimeDto::toRelease)
 
         return HomeFeed(
@@ -104,7 +101,21 @@ class NetworkReleaseRepository(
         api.anime(id.toString()).toRelease()
 }
 
+internal fun YaniFeedDto.discoverySources(featuredIds: Set<Int>): List<YaniAnimeDto> {
+    fun List<YaniAnimeDto>.available(): List<YaniAnimeDto> =
+        distinctBy { it.animeId }
+            .filterNot { it.animeId in featuredIds }
+
+    val recommendations = recommends.available()
+    return recommendations
+        .ifEmpty {
+            (topCarousel?.items.orEmpty() + announcements).available()
+        }
+        .take(HOME_DISCOVERY_LIMIT)
+}
+
 private const val HOME_FEATURED_LIMIT = 6
+private const val HOME_DISCOVERY_LIMIT = 16
 
 internal fun YaniAnimeDto.toRelease(): ReleaseDto {
     val screenshotsByEpisode = randomScreenshots
