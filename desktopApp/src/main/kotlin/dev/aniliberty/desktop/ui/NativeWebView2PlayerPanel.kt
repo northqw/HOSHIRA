@@ -157,8 +157,9 @@ internal class NativeWebView2PlayerPanel(
     ) {
         stateCallback = onStateChange
         actionCallback = onAction
+        val chromeChanged = requestedChrome != chrome
         requestedChrome = chrome
-        if (requestedUrl == url) return
+        if (requestedUrl == url && !chromeChanged) return
 
         requestedUrl = url
         notifyState(EmbeddedPlayerState.Starting)

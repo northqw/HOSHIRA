@@ -41,7 +41,7 @@ Hoshira — независимое desktop-приложение с фокусо�
 | Каталог | Бесконечная подгрузка, фильтры и сортировка |
 | Поиск | Поиск по каталогу с задержкой ввода и обработкой ошибок |
 | Страница аниме | Баннер, метаданные, жанры, студии озвучки и эпизоды |
-| Плеер | WebView2 на Windows, JCEF на Linux, выбор источника и качества, собственные элементы управления |
+| Плеер | WebView2 на Windows, WebKitGTK на Linux, выбор источника и качества, собственные элементы управления |
 | Аккаунт | Авторизация YummyAnime, избранное и пользовательские списки |
 | Desktop UX | Кэш изображений, тёмное окно, загрузочные экраны и фирменный установщик |
 
@@ -60,11 +60,21 @@ JVM поставляется вместе с desktop-дистрибутивом 
 
 - Ubuntu 22.04/24.04 либо совместимый x64-дистрибутив;
 - пакет `.deb` или `.rpm` из артефактов GitVerse CI/CD;
+- WebKitGTK и мультимедийные плагины GStreamer;
 - подключение к интернету.
 
-При первом открытии плеера приложение загружает совместимый нативный пакет
-Chromium/JCEF в пользовательский кэш. До завершения загрузки отображается
-фирменный экран подготовки плеера.
+Linux-версия использует системный WebKitGTK и GStreamer, поэтому отдельный
+Chromium-пакет не скачивается. На Ubuntu необходимые мультимедийные компоненты
+можно установить командой:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-0 gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav
+```
+
+Для Ubuntu 22.04 вместо `libwebkit2gtk-4.1-0` используется
+`libwebkit2gtk-4.0-37`.
 
 ## Структура проекта
 
@@ -73,7 +83,7 @@ desktopApp/
 ├─ installer/             # фирменная оболочка установщика
 ├─ src/main/kotlin/       # приложение, API, состояние и UI
 ├─ src/windowsMain/       # DPAPI, пути и Windows-интеграция
-├─ src/linuxMain/         # Linux-пути, хранилище и JCEF-плеер
+├─ src/linuxMain/         # Linux-пути, хранилище и WebKitGTK-плеер
 ├─ src/main/resources/    # иконки и нативный WebView2 loader
 ├─ src/test/              # unit-тесты
 └─ tools/                 # сборочные инструменты Windows
@@ -92,7 +102,7 @@ third_party/              # тексты лицензий сторонних к�
 - Kotlin Coroutines и Serialization;
 - Coil 3 для изображений и дискового кэша;
 - JNA и Microsoft WebView2 для нативной интеграции с Windows;
-- JCEF Maven для экспериментального Linux-плеера;
+- Eclipse SWT, WebKitGTK и GStreamer для экспериментального Linux-плеера;
 - Gradle Wrapper;
 - WiX/jpackage и собственная C#-оболочка установщика.
 

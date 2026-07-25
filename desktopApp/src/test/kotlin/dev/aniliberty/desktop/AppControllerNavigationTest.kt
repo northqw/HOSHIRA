@@ -61,13 +61,47 @@ class AppControllerNavigationTest {
         assertEquals(AppRoute.Search, controller.route)
         assertEquals("тест", controller.searchQuery)
     }
+
+    @Test
+    fun `background home refresh replaces data and keeps previous data on failure`() = runBlocking {
+        val repository = FakeReleaseRepository(release)
+        val controller = AppController(
+            repository = repository,
+            accountRepository = FakeAccountRepository(),
+        )
+        controller.loadHome()
+
+        val refreshedRelease = release.copy(
+            id = 43,
+            name = ReleaseNameDto(main = "Обновлённый релиз"),
+        )
+        repository.homeRelease = refreshedRelease
+        controller.refreshHome()
+
+        assertEquals(
+            refreshedRelease,
+            assertIs<UiState.Ready<HomeFeed>>(controller.homeState).value.featured.first(),
+        )
+
+        repository.homeFailure = IllegalStateException("network unavailable")
+        controller.refreshHome()
+
+        assertEquals(
+            refreshedRelease,
+            assertIs<UiState.Ready<HomeFeed>>(controller.homeState).value.featured.first(),
+        )
+    }
 }
 
 private class FakeReleaseRepository(
     private val release: ReleaseDto,
 ) : ReleaseRepository {
+    var homeRelease: ReleaseDto = release
+    var homeFailure: Throwable? = null
+
     override suspend fun home(): HomeFeed =
-        HomeFeed(listOf(release), listOf(release), emptyList())
+        homeFailure?.let { throw it }
+            ?: HomeFeed(listOf(homeRelease), listOf(homeRelease), emptyList())
 
     override suspend fun search(query: String): List<ReleaseDto> = listOf(release)
 

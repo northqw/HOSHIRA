@@ -41,7 +41,7 @@ window, session storage, and embedded browser have platform implementations.
 | Catalog | Infinite loading, filters, and sorting |
 | Search | Debounced catalog search with clear loading and error states |
 | Anime details | Artwork, metadata, genres, dubbing studio selector, and episodes |
-| Player | WebView2 on Windows, JCEF on Linux, source and quality selection, custom playback controls |
+| Player | WebView2 on Windows, WebKitGTK on Linux, source and quality selection, custom playback controls |
 | Account | YummyAnime sign-in, favorites, and personal lists |
 | Desktop UX | Image cache, dark window chrome, loading states, and a branded installer |
 
@@ -60,11 +60,21 @@ The JVM is bundled with the desktop distribution.
 
 - Ubuntu 22.04/24.04 or a compatible x64 distribution;
 - a `.deb` or `.rpm` package from GitVerse CI/CD artifacts;
+- WebKitGTK and GStreamer multimedia plug-ins;
 - an internet connection.
 
-On the first player launch, Hoshira downloads the matching native Chromium/JCEF
-bundle into the current user's cache and keeps the branded loading state visible
-until the browser is ready.
+The Linux build uses the system WebKitGTK and GStreamer stack, so it does not
+download a separate Chromium bundle. On Ubuntu, the multimedia dependencies can
+be installed with:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-0 gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav
+```
+
+Ubuntu 22.04 provides `libwebkit2gtk-4.0-37` instead of
+`libwebkit2gtk-4.1-0`.
 
 ## Repository layout
 
@@ -73,7 +83,7 @@ desktopApp/
 ├─ installer/             # branded installer shell
 ├─ src/main/kotlin/       # application, API, state, and UI
 ├─ src/windowsMain/       # DPAPI, paths, and Windows integration
-├─ src/linuxMain/         # Linux paths, storage, and JCEF player
+├─ src/linuxMain/         # Linux paths, storage, and WebKitGTK player
 ├─ src/main/resources/    # icons and native WebView2 loader
 ├─ src/test/              # unit tests
 └─ tools/                 # Windows packaging tools
@@ -93,7 +103,7 @@ details.
 - Kotlin Coroutines and Serialization;
 - Coil 3 with disk-backed image caching;
 - JNA and Microsoft WebView2 for native Windows integration;
-- JCEF Maven for the experimental Linux player;
+- Eclipse SWT, WebKitGTK, and GStreamer for the experimental Linux player;
 - Gradle Wrapper;
 - WiX/jpackage with a custom C# installer shell.
 

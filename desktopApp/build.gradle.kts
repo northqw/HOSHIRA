@@ -51,7 +51,12 @@ dependencies {
         implementation("net.java.dev.jna:jna-platform:5.6.0")
     }
     if (targetOs == "linux") {
-        implementation("me.friwi:jcefmaven:146.0.10")
+        implementation("org.eclipse.platform:org.eclipse.swt.gtk.linux.x86_64:3.128.0") {
+            // The platform jar already contains SWT's Java classes. Its Maven
+            // POM also references an unresolved ${osgi.platform} placeholder,
+            // which Gradle cannot substitute and which is unnecessary here.
+            exclude(group = "org.eclipse.platform", module = "org.eclipse.swt")
+        }
     }
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")

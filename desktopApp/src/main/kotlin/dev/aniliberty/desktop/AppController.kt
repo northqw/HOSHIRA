@@ -15,6 +15,7 @@ import dev.aniliberty.desktop.data.YaniApiException
 import dev.aniliberty.desktop.model.EpisodeDto
 import dev.aniliberty.desktop.model.HomeFeed
 import dev.aniliberty.desktop.model.ReleaseDto
+import kotlinx.coroutines.CancellationException
 
 sealed interface AppRoute {
     data object Home : AppRoute
@@ -47,6 +48,8 @@ class AppController(
     private val repository: ReleaseRepository,
     private val accountRepository: AccountRepository = NetworkAccountRepository(),
 ) {
+    private var homeLoading = false
+
     var route: AppRoute by mutableStateOf(AppRoute.Home)
         private set
 
@@ -116,12 +119,31 @@ class AppController(
 
     suspend fun loadHome(force: Boolean = false) {
         if (!force && homeState is UiState.Ready) return
-        homeState = UiState.Loading
-        homeState = runCatching { repository.home() }
-            .fold(
-                onSuccess = { UiState.Ready(it) },
-                onFailure = { UiState.Error(it.userFacingMessage()) },
-            )
+        updateHome(showLoading = true)
+    }
+
+    suspend fun refreshHome() {
+        updateHome(showLoading = false)
+    }
+
+    private suspend fun updateHome(showLoading: Boolean) {
+        if (homeLoading) return
+        homeLoading = true
+        val previousState = homeState
+        if (showLoading || previousState !is UiState.Ready) {
+            homeState = UiState.Loading
+        }
+
+        try {
+            homeState = UiState.Ready(repository.home())
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            if (showLoading || previousState !is UiState.Ready) {
+                homeState = UiState.Error(error.userFacingMessage())
+            }
+        } finally {
+            homeLoading = false
+        }
     }
 
     suspend fun restoreAccount() {

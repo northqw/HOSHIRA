@@ -107,6 +107,13 @@ fun HoshiraApp(
             showSplash = false
         }
 
+        LaunchedEffect(controller) {
+            while (true) {
+                delay(HOME_REFRESH_INTERVAL_MS)
+                controller.refreshHome()
+            }
+        }
+
         LaunchedEffect(Unit) {
             controller.restoreAccount()
         }
@@ -853,3 +860,5 @@ private fun openSupportPage() {
         }
     }
 }
+
+private const val HOME_REFRESH_INTERVAL_MS = 10 * 60 * 1_000L

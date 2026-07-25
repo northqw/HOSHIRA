@@ -98,10 +98,10 @@ fun PlayerScreen(
         },
     )
 
-    var playerState by remember(playerPageUrl) {
+    var playerState by remember {
         mutableStateOf<EmbeddedPlayerState>(EmbeddedPlayerState.Starting)
     }
-    var mountNativePlayer by remember(playerPageUrl) {
+    var mountNativePlayer by remember {
         mutableStateOf(false)
     }
     val playerPanel = remember {
@@ -118,7 +118,7 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(playerPageUrl) {
+    LaunchedEffect(Unit) {
         // Present one stable Compose frame before attaching the heavyweight
         // native HWND. This prevents the AWT interop layer from exposing its
         // default white surface during the route transition.
