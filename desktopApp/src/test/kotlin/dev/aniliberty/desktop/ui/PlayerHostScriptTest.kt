@@ -9,11 +9,11 @@ import kotlin.test.assertFalse
 
 class PlayerHostScriptTest {
     @Test
-    fun `Alloha is preferred when a dubbing has multiple player sources`() {
+    fun `Kodik is preferred when a dubbing has multiple player sources`() {
         val sources = listOf("Kodik", "Sibnet", "Alloha")
 
         assertEquals(
-            listOf("Alloha", "Kodik", "Sibnet"),
+            listOf("Kodik", "Sibnet", "Alloha"),
             sources.sortedBy(::playerSourcePriority),
         )
     }
@@ -28,6 +28,11 @@ class PlayerHostScriptTest {
                 position = "1 из 12",
                 hasPrevious = false,
                 hasNext = true,
+                resumeSeconds = 95.0,
+                startupVolume = 0.65f,
+                preferredQuality = "1080p",
+                autoplayNext = true,
+                controlsHideDelayMs = 4_800,
                 sources = listOf(
                     EmbeddedPlayerSource(
                         episodeId = "episode-1",
@@ -48,7 +53,7 @@ class PlayerHostScriptTest {
             }
             .toList()
 
-        assertEquals(3, decodedPayloads.size)
+        assertEquals(4, decodedPayloads.size)
         val css = decodedPayloads[1]
         val markup = decodedPayloads[2]
 
@@ -93,12 +98,17 @@ class PlayerHostScriptTest {
         assertContains(script, "window.setInterval(scheduleScan, 160)")
         assertContains(script, "if (activeVideo?.isConnected)")
         assertContains(script, "providerRootsDirty")
-        assertContains(script, "Загрузка может занять больше времени из-за обхода встроенной рекламы")
+        assertFalse(script.contains("из-за обхода встроенной рекламы"))
         assertContains(script, "discoverQualityOptions(lastProviderRoots)")
         assertFalse(script.contains("discoverQualityOptions(roots)"))
         assertFalse(script.contains("Ожидание видео от источника"))
         assertContains(script, "window.setTimeout(() => {")
-        assertContains(script, "}, isKodikProvider ? 3000 : 6000);")
+        assertContains(script, "const controlsHideDelay = 4800")
+        assertContains(script, "const resumeSeconds = 95.0")
+        assertContains(script, "const startupVolume = 0.65")
+        assertContains(script, "showNextCountdown")
+        assertContains(script, "reportPlayback")
+        assertContains(script, "}, isKodikProvider ? 2000 : 6000);")
         assertFalse(script.contains("}, 6000);"))
         assertFalse(script.contains("}, 12000);"))
         assertFalse(script.contains("if (isKodikProvider && !activeVideo)"))

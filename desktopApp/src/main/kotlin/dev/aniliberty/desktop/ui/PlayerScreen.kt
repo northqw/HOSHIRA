@@ -27,7 +27,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.aniliberty.desktop.PlaybackSession
+import dev.aniliberty.desktop.data.PlayerPreferences
 import dev.aniliberty.desktop.model.EpisodeDto
+import java.awt.EventQueue
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.delay
 
@@ -36,6 +38,9 @@ fun PlayerScreen(
     session: PlaybackSession?,
     onBack: () -> Unit,
     onPlayEpisode: (EpisodeDto) -> Unit,
+    preferences: PlayerPreferences,
+    preferredQuality: String?,
+    onPlayback: (Double, Double, Float, String?) -> Unit,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -99,6 +104,11 @@ fun PlayerScreen(
                 selected = source.id == episode.id,
             )
         },
+        resumeSeconds = session.resumeSeconds,
+        startupVolume = preferences.startupVolume,
+        preferredQuality = preferredQuality,
+        autoplayNext = preferences.autoplayNext,
+        controlsHideDelayMs = preferences.controlsHideDelayMs,
     )
 
     var playerState by remember {
@@ -114,7 +124,17 @@ fun PlayerScreen(
     val currentFullscreenCallback by rememberUpdatedState(onFullscreenChange)
     val onPlayerAction: (EmbeddedPlayerAction) -> Unit = { action ->
         when (action) {
-            EmbeddedPlayerAction.Back -> onBack()
+            EmbeddedPlayerAction.Back -> {
+                if (currentFullscreen) {
+                    // Restore the top-level window first. Native fullscreen
+                    // changes and heavyweight WebView2 disposal both trigger
+                    // AWT resize/redraw work and must not share one event.
+                    currentFullscreenCallback(false)
+                    EventQueue.invokeLater(onBack)
+                } else {
+                    onBack()
+                }
+            }
             EmbeddedPlayerAction.Previous -> previousEpisode?.let(onPlayEpisode)
             EmbeddedPlayerAction.Next -> nextEpisode?.let(onPlayEpisode)
             is EmbeddedPlayerAction.SetFullscreen ->
@@ -122,6 +142,12 @@ fun PlayerScreen(
             is EmbeddedPlayerAction.SelectSource -> sourceCandidates
                 .firstOrNull { it.id == action.episodeId }
                 ?.let(onPlayEpisode)
+            is EmbeddedPlayerAction.Playback -> onPlayback(
+                action.positionSeconds,
+                action.durationSeconds,
+                action.volume,
+                action.quality,
+            )
         }
     }
 
@@ -131,6 +157,9 @@ fun PlayerScreen(
         // default white surface during the route transition.
         delay(90)
         mountNativePlayer = true
+        if (preferences.autoFullscreen && !currentFullscreen) {
+            currentFullscreenCallback(true)
+        }
     }
     DisposableEffect(Unit) {
         onDispose {

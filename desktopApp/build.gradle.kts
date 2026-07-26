@@ -78,7 +78,7 @@ compose.desktop {
                 "linux" -> targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
             }
             packageName = "Hoshira"
-            packageVersion = "0.2.6"
+            packageVersion = "0.3.0"
             description = "Hoshira — неофициальный desktop-клиент для просмотра аниме"
             vendor = "Hoshira Community"
             modules(
@@ -115,4 +115,32 @@ compose.desktop {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.matching { it.name == "createReleaseDistributable" }.configureEach {
+    val stalePortableFlag = layout.buildDirectory
+        .file("compose/binaries/main-release/app/Hoshira/portable.flag")
+    outputs.upToDateWhen { !stalePortableFlag.get().asFile.exists() }
+    doLast {
+        stalePortableFlag.get().asFile.delete()
+    }
+}
+
+val createPortableDistributable by tasks.registering(Sync::class) {
+    dependsOn("createReleaseDistributable")
+    from(layout.buildDirectory.dir("compose/binaries/main-release/app")) {
+        exclude("**/portable.flag")
+    }
+    into(layout.buildDirectory.dir("compose/binaries/main-release/portable"))
+
+    doLast {
+        val appRoot = layout.buildDirectory
+            .dir("compose/binaries/main-release/portable/Hoshira")
+            .get()
+            .asFile
+        appRoot.mkdirs()
+        appRoot.resolve("portable.flag").writeText(
+            "Hoshira portable mode 0.3.0\n",
+        )
+    }
 }

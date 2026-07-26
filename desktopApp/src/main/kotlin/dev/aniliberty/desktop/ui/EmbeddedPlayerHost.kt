@@ -16,6 +16,11 @@ internal data class EmbeddedPlayerChrome(
     val hasPrevious: Boolean,
     val hasNext: Boolean,
     val sources: List<EmbeddedPlayerSource>,
+    val resumeSeconds: Double = 0.0,
+    val startupVolume: Float = 1f,
+    val preferredQuality: String? = null,
+    val autoplayNext: Boolean = true,
+    val controlsHideDelayMs: Int = 4_800,
 )
 
 internal data class EmbeddedPlayerSource(
@@ -30,6 +35,12 @@ internal sealed interface EmbeddedPlayerAction {
     data object Next : EmbeddedPlayerAction
     data class SetFullscreen(val fullscreen: Boolean) : EmbeddedPlayerAction
     data class SelectSource(val episodeId: String) : EmbeddedPlayerAction
+    data class Playback(
+        val positionSeconds: Double,
+        val durationSeconds: Double,
+        val volume: Float,
+        val quality: String?,
+    ) : EmbeddedPlayerAction
 }
 
 /*
@@ -471,6 +482,9 @@ internal fun playerHostScript(
     val encodedUrl = Base64.getEncoder().encodeToString(
         playerUrl.toByteArray(StandardCharsets.UTF_8),
     )
+    val encodedQuality = Base64.getEncoder().encodeToString(
+        chrome.preferredQuality.orEmpty().toByteArray(StandardCharsets.UTF_8),
+    )
     val previousButton = if (chrome.hasPrevious) {
         """
             <button class="action episode-action" data-action="previous">
@@ -587,6 +601,15 @@ internal fun playerHostScript(
                 </svg>
               </span>
             </button>
+          </div>
+          <div id="next-countdown" style="display:none;position:absolute;right:32px;bottom:116px;z-index:40;
+            width:300px;padding:20px;border-radius:16px;background:rgba(10,10,12,.94);
+            border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 50px rgba(0,0,0,.45)">
+            <div style="font-size:16px;font-weight:700">Следующая серия через <span id="next-seconds">8</span> сек.</div>
+            <div style="display:flex;gap:10px;margin-top:14px">
+              <button class="action episode-action primary" id="next-now" type="button">Смотреть сейчас</button>
+              <button class="action episode-action" id="next-cancel" type="button">Отмена</button>
+            </div>
           </div>
 
           <div class="bottom-shade"></div>
@@ -1573,12 +1596,18 @@ internal fun playerHostScript(
           const qualityToggle = document.getElementById('quality-toggle');
           const qualityLabel = document.getElementById('quality-label');
           const qualityOptions = document.getElementById('quality-options');
+          const nextCountdown = document.getElementById('next-countdown');
+          const nextSeconds = document.getElementById('next-seconds');
+          const nextNow = document.getElementById('next-now');
+          const nextCancel = document.getElementById('next-cancel');
+          const resumeSeconds = ${chrome.resumeSeconds.coerceAtLeast(0.0)};
+          const startupVolume = ${chrome.startupVolume.coerceIn(0f, 1f)};
+          let preferredQuality = decode("$encodedQuality");
+          const autoplayNext = ${chrome.autoplayNext && chrome.hasNext};
+          const controlsHideDelay = ${chrome.controlsHideDelayMs.coerceIn(1_500, 12_000)};
 
           if (isKodikProvider) {
             loadingLabel.textContent = 'Запускаем Kodik…';
-            loadingNote.textContent =
-              'Загрузка может занять больше времени из-за обхода встроенной рекламы в плеере.';
-            loadingNote.classList.add('is-visible');
           }
 
           let chromeHideTimer = 0;
@@ -1593,10 +1622,13 @@ internal fun playerHostScript(
           let lastAudibleVolume = 1;
           let scanScheduled = false;
           let startupScanTimer = 0;
+          let nextCountdownTimer = 0;
+          let lastProgressReportAt = 0;
           const observedDocuments = new WeakSet();
           const activityDocuments = new WeakSet();
           const wiredFrames = new WeakSet();
           const bootstrappedVideos = new WeakSet();
+          const configuredVideos = new WeakSet();
 
           const showPlayerLoading = () => {
             playerLoading?.classList.remove('is-hidden');
@@ -1672,7 +1704,7 @@ internal fun playerHostScript(
               document.querySelector('.source-picker')?.classList.remove('open');
               qualityPicker?.classList.remove('open');
               chrome.classList.add('is-hidden');
-            }, 2800);
+            }, controlsHideDelay);
           };
 
           window.hoshiraActivity = scheduleChromeHide;
@@ -1690,6 +1722,48 @@ internal fun playerHostScript(
             }
             return false;
           };
+
+          const reportPlayback = force => {
+            const video = activeVideo;
+            if (!video) return;
+            const now = performance.now();
+            if (!force && now - lastProgressReportAt < 2000) return;
+            lastProgressReportAt = now;
+            postHostAction(
+              'playback:' +
+              String(Number.isFinite(video.currentTime) ? video.currentTime : 0) + ':' +
+              String(Number.isFinite(video.duration) ? video.duration : 0) + ':' +
+              String(video.muted ? 0 : video.volume) + ':' +
+              encodeURIComponent(qualityLabel?.textContent || '')
+            );
+          };
+
+          const hideNextCountdown = () => {
+            window.clearInterval(nextCountdownTimer);
+            nextCountdownTimer = 0;
+            if (nextCountdown) nextCountdown.style.display = 'none';
+          };
+
+          const showNextCountdown = () => {
+            if (!autoplayNext || !nextCountdown) return;
+            hideNextCountdown();
+            let seconds = 8;
+            nextSeconds.textContent = String(seconds);
+            nextCountdown.style.display = 'block';
+            nextCountdownTimer = window.setInterval(() => {
+              seconds -= 1;
+              nextSeconds.textContent = String(Math.max(0, seconds));
+              if (seconds <= 0) {
+                hideNextCountdown();
+                postHostAction('next');
+              }
+            }, 1000);
+          };
+          nextNow?.addEventListener('click', () => {
+            hideNextCountdown();
+            postHostAction('next');
+          });
+          nextCancel?.addEventListener('click', hideNextCountdown);
 
           document.querySelectorAll('[data-action]').forEach(button => {
             button.addEventListener('click', event => {
@@ -1781,6 +1855,8 @@ internal fun playerHostScript(
                 element.click();
               }
               qualityLabel.textContent = entry.label;
+              preferredQuality = '';
+              reportPlayback(true);
               qualityPicker.classList.remove('open');
               showPlayerStatus('Переключаем качество на ' + entry.label + '…');
               window.setTimeout(scheduleScan, 160);
@@ -1821,6 +1897,16 @@ internal fun playerHostScript(
             });
             const selected = entries.find(entry => entry.selected);
             if (selected) qualityLabel.textContent = selected.label;
+            if (preferredQuality) {
+              const preferred = entries.find(
+                entry => entry.label.toLowerCase() === preferredQuality.toLowerCase()
+              );
+              if (preferred && !preferred.selected) {
+                window.setTimeout(() => activateProviderQuality(preferred), 0);
+              } else if (preferred) {
+                preferredQuality = '';
+              }
+            }
           };
 
           const discoverQualityOptions = roots => {
@@ -2338,6 +2424,22 @@ internal fun playerHostScript(
             activeVideo.removeAttribute('controls');
             activeVideo.playsInline = true;
             activeVideo.setAttribute('playsinline', '');
+            if (!configuredVideos.has(activeVideo)) {
+              configuredVideos.add(activeVideo);
+              activeVideo.muted = false;
+              activeVideo.volume = startupVolume;
+              const applyResume = () => {
+                if (
+                  resumeSeconds > 0 &&
+                  Number.isFinite(activeVideo.duration) &&
+                  activeVideo.duration > resumeSeconds + 3
+                ) {
+                  activeVideo.currentTime = resumeSeconds;
+                }
+              };
+              applyResume();
+              activeVideo.addEventListener('loadedmetadata', applyResume, { once: true });
+            }
             lastAudibleVolume = activeVideo.volume > 0.001 ? activeVideo.volume : lastAudibleVolume;
             if (startupScanTimer) {
               window.clearInterval(startupScanTimer);
@@ -2349,13 +2451,19 @@ internal fun playerHostScript(
               activeVideo.addEventListener(name, listener);
               videoListeners.push(() => video.removeEventListener(name, listener));
             };
-            const refresh = () => {
+            const refresh = event => {
               hidePlayerStatus();
               updateVideoState();
+              reportPlayback(event?.type !== 'timeupdate');
             };
             ['play', 'pause', 'timeupdate', 'durationchange', 'loadedmetadata',
              'volumechange', 'ended', 'seeking', 'seeked', 'canplay']
               .forEach(name => listen(name, refresh));
+            listen('ended', () => {
+              reportPlayback(true);
+              showNextCountdown();
+            });
+            listen('play', hideNextCountdown);
             listen('waiting', () => {
               showPlayerStatus('Буферизация…');
               updateVideoState();
@@ -2441,7 +2549,7 @@ internal fun playerHostScript(
             if (!activeVideo && !isKodikProvider) {
               showPlayerStatus('Источник загружается дольше обычного…');
             }
-          }, isKodikProvider ? 3000 : 6000);
+          }, isKodikProvider ? 2000 : 6000);
           setControlAvailability(false);
           setRangeProgress(seekRange, 0);
           setRangeProgress(volumeRange, 1);

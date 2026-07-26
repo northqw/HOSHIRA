@@ -1,5 +1,7 @@
 package dev.aniliberty.desktop.ui
 
+import dev.aniliberty.desktop.platformCacheDirectory
+import dev.aniliberty.desktop.data.UserDataStore
 import com.sun.jna.CallbackReference
 import com.sun.jna.Function
 import com.sun.jna.Memory
@@ -23,6 +25,7 @@ import com.sun.jna.win32.StdCallLibrary
 import java.awt.Canvas
 import java.awt.BasicStroke
 import java.awt.Color
+import java.awt.Dimension
 import java.awt.EventQueue
 import java.awt.Font
 import java.awt.Graphics
@@ -34,6 +37,8 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.io.File
 import java.net.URI
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.atomic.AtomicBoolean
@@ -41,6 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.swing.Timer
 import kotlin.concurrent.thread
+import kotlin.math.roundToInt
 import kotlinx.serialization.json.Json
 
 /**
@@ -314,9 +320,9 @@ private class WindowsWebView2Host(
     private var initializationScriptId: String? = null
     private var navigationGeneration = 0L
     @Volatile
-    private var requestedWidth = parent.width.coerceAtLeast(1)
+    private var requestedWidth = readParentClientSize().width
     @Volatile
-    private var requestedHeight = parent.height.coerceAtLeast(1)
+    private var requestedHeight = readParentClientSize().height
     @Volatile
     private var requestedVisible = parent.isShowing
 
@@ -349,10 +355,33 @@ private class WindowsWebView2Host(
 
     fun resize() {
         if (closed.get()) return
-        requestedWidth = parent.width.coerceAtLeast(1)
-        requestedHeight = parent.height.coerceAtLeast(1)
+        val clientSize = readParentClientSize()
+        requestedWidth = clientSize.width
+        requestedHeight = clientSize.height
         requestedVisible = parent.isShowing
         post(::resizeCore)
+    }
+
+    /**
+     * AWT component bounds use logical user-space units on HiDPI displays,
+     * while child HWND and WebView2 controller bounds use native client
+     * pixels. Reading the Canvas HWND avoids applying the scale twice (or not
+     * at all) and also follows per-monitor DPI changes.
+     */
+    private fun readParentClientSize(): Dimension {
+        val clientBounds = RECT()
+        if (User32.INSTANCE.GetClientRect(parentWindow, clientBounds)) {
+            return Dimension(
+                (clientBounds.right - clientBounds.left).coerceAtLeast(1),
+                (clientBounds.bottom - clientBounds.top).coerceAtLeast(1),
+            )
+        }
+
+        val transform = parent.graphicsConfiguration?.defaultTransform
+        return Dimension(
+            (parent.width * (transform?.scaleX ?: 1.0)).roundToInt().coerceAtLeast(1),
+            (parent.height * (transform?.scaleY ?: 1.0)).roundToInt().coerceAtLeast(1),
+        )
     }
 
     fun notifyParentPositionChanged() {
@@ -451,6 +480,7 @@ private class WindowsWebView2Host(
     }
 
     private fun requestEnvironment() {
+        WebView2NativeRuntime.configureHardwareAcceleration()
         val environmentHandler = CompletionHandler(
             interfaceId = IID_CORE_WEBVIEW2_CREATE_ENVIRONMENT_COMPLETED_HANDLER,
         ) { errorCode, createdEnvironment ->
@@ -988,14 +1018,33 @@ private class WindowsWebView2Host(
             "next" -> onAction(EmbeddedPlayerAction.Next)
             "fullscreen:true" -> onAction(EmbeddedPlayerAction.SetFullscreen(true))
             "fullscreen:false" -> onAction(EmbeddedPlayerAction.SetFullscreen(false))
-            else -> message
-                .removePrefix("source:")
-                .takeIf { sourceId ->
-                    message.startsWith("source:") && sourceId.isNotBlank()
+            else -> when {
+                message.startsWith("source:") -> message
+                    .removePrefix("source:")
+                    .takeIf(String::isNotBlank)
+                    ?.let { onAction(EmbeddedPlayerAction.SelectSource(it)) }
+                message.startsWith("playback:") -> {
+                    val values = message.removePrefix("playback:").split(":", limit = 4)
+                    if (values.size == 4) {
+                        val position = values[0].toDoubleOrNull()
+                        val duration = values[1].toDoubleOrNull()
+                        val volume = values[2].toFloatOrNull()
+                        if (position != null && duration != null && volume != null) {
+                            onAction(
+                                EmbeddedPlayerAction.Playback(
+                                    positionSeconds = position,
+                                    durationSeconds = duration,
+                                    volume = volume,
+                                    quality = URLDecoder.decode(
+                                        values[3],
+                                        StandardCharsets.UTF_8,
+                                    ).takeIf(String::isNotBlank),
+                                ),
+                            )
+                        }
+                    }
                 }
-                ?.let { sourceId ->
-                    onAction(EmbeddedPlayerAction.SelectSource(sourceId))
-                }
+            }
         }
     }
 
@@ -1010,17 +1059,28 @@ private class WindowsWebView2Host(
 }
 
 private object WebView2NativeRuntime {
+    private const val DISABLE_GPU_ARGUMENTS = "--disable-gpu --disable-gpu-compositing"
+
+    fun configureHardwareAcceleration() {
+        if (!UserDataStore().snapshot().preferences.hardwareAcceleration) {
+            Kernel32.INSTANCE.SetEnvironmentVariable(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                DISABLE_GPU_ARGUMENTS,
+            )
+        }
+    }
+
     val userDataDirectory: File by lazy {
-        File(localAppDataDirectory(), "Hoshira/browser/webview2").apply {
+        platformCacheDirectory().resolve("browser/webview2").toFile().apply {
             mkdirs()
         }
     }
 
     val loader: WebView2Loader by lazy {
-        val runtimeDirectory = File(
-            localAppDataDirectory(),
-            "Hoshira/native/webview2/x64",
-        ).apply {
+        val runtimeDirectory = platformCacheDirectory()
+            .resolve("native/webview2/x64")
+            .toFile()
+            .apply {
             mkdirs()
         }
         val loaderFile = File(runtimeDirectory, "WebView2Loader.dll")

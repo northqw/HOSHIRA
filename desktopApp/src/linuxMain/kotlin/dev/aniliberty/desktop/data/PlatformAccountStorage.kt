@@ -1,5 +1,6 @@
 package dev.aniliberty.desktop.data
 
+import dev.aniliberty.desktop.platformDataDirectory
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
@@ -44,13 +45,7 @@ internal fun platformUnprotectSession(payload: ByteArray): ByteArray {
     return cipher.doFinal(encrypted)
 }
 
-internal fun platformConfigDirectory(): Path {
-    val xdgConfig = System.getenv("XDG_CONFIG_HOME")
-        ?.takeIf(String::isNotBlank)
-        ?.let(Path::of)
-    val home = System.getProperty("user.home")
-    return (xdgConfig ?: Path.of(home, ".config")).resolve("hoshira")
-}
+internal fun platformConfigDirectory(): Path = platformDataDirectory()
 
 private fun loadOrCreateSessionKey(): ByteArray {
     val keyFile = platformConfigDirectory()

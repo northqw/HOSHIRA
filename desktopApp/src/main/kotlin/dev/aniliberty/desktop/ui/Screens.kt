@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,6 +60,7 @@ import dev.aniliberty.desktop.data.AccountProfile
 import dev.aniliberty.desktop.data.AnimeListKind
 import dev.aniliberty.desktop.data.AnimeMembership
 import dev.aniliberty.desktop.data.CatalogFilters
+import dev.aniliberty.desktop.data.WatchProgress
 import dev.aniliberty.desktop.model.EpisodeDto
 import dev.aniliberty.desktop.model.HomeFeed
 import dev.aniliberty.desktop.model.ReleaseDto
@@ -69,9 +71,11 @@ import kotlinx.coroutines.launch
 @Composable
 fun HomeScreen(
     state: UiState<HomeFeed>,
+    continueWatching: List<WatchProgress>,
     onRetry: () -> Unit,
     onOpenRelease: (Int) -> Unit,
     onPlay: (ReleaseDto) -> Unit,
+    onContinueWatching: (WatchProgress) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (state) {
@@ -79,8 +83,10 @@ fun HomeScreen(
         is UiState.Error -> ErrorState(state.message, onRetry, modifier)
         is UiState.Ready -> HomeContent(
             feed = state.value,
+            continueWatching = continueWatching,
             onOpenRelease = onOpenRelease,
             onPlay = onPlay,
+            onContinueWatching = onContinueWatching,
             modifier = modifier,
         )
     }
@@ -89,8 +95,10 @@ fun HomeScreen(
 @Composable
 private fun HomeContent(
     feed: HomeFeed,
+    continueWatching: List<WatchProgress>,
     onOpenRelease: (Int) -> Unit,
     onPlay: (ReleaseDto) -> Unit,
+    onContinueWatching: (WatchProgress) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var activeHeroIndex by remember(feed.featured) { mutableStateOf(0) }
@@ -147,6 +155,15 @@ private fun HomeContent(
             }
         }
 
+        if (continueWatching.isNotEmpty()) {
+            item {
+                ContinueWatchingRail(
+                    items = continueWatching,
+                    onClick = onContinueWatching,
+                )
+            }
+        }
+
         item {
             ReleaseRail(
                 title = "Последние обновления",
@@ -167,6 +184,66 @@ private fun HomeContent(
             }
         }
 
+    }
+}
+
+@Composable
+private fun ContinueWatchingRail(
+    items: List<WatchProgress>,
+    onClick: (WatchProgress) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 56.dp)) {
+        Column(Modifier.padding(horizontal = 72.dp)) {
+            Text("Продолжить просмотр", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(7.dp))
+            Text("С того места, где вы остановились", color = AniColors.TextMuted)
+        }
+        Spacer(Modifier.height(22.dp))
+        LazyRow(
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 72.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            items(items, key = { "${it.releaseId}:${it.episodeId}" }) { item ->
+                Column(
+                    Modifier
+                        .width(326.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(AniColors.Surface)
+                        .clickable { onClick(item) },
+                ) {
+                    Box(Modifier.fillMaxWidth().height(183.dp)) {
+                        RemoteImage(
+                            url = item.imageUrl,
+                            contentDescription = item.releaseTitle,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                            filterQuality = FilterQuality.Medium,
+                        )
+                        LinearProgressIndicator(
+                            progress = { item.fraction },
+                            modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
+                            color = AniColors.OrangeBright,
+                            trackColor = Color.White.copy(alpha = 0.18f),
+                        )
+                    }
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            item.releaseTitle,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(5.dp))
+                        Text(
+                            "${item.episodeTitle} · ${item.dubbing.ifBlank { item.source }}",
+                            color = AniColors.TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -704,6 +781,8 @@ fun DetailsScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onPlayEpisode: (EpisodeDto) -> Unit,
+    preferredDubbing: String?,
+    preferredSourceName: String,
     onSetAnimeList: (AnimeListKind?) -> Unit,
     onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier,
@@ -718,6 +797,8 @@ fun DetailsScreen(
             accountActionError = accountActionError,
             onBack = onBack,
             onPlayEpisode = onPlayEpisode,
+            preferredDubbing = preferredDubbing,
+            preferredSourceName = preferredSourceName,
             onSetAnimeList = onSetAnimeList,
             onToggleFavorite = onToggleFavorite,
             modifier = modifier,
@@ -733,6 +814,8 @@ private fun DetailsContent(
     accountActionError: String?,
     onBack: () -> Unit,
     onPlayEpisode: (EpisodeDto) -> Unit,
+    preferredDubbing: String?,
+    preferredSourceName: String,
     onSetAnimeList: (AnimeListKind?) -> Unit,
     onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier,
@@ -751,7 +834,11 @@ private fun DetailsContent(
             )
     }
     var selectedDubbing by remember(release.id) {
-        mutableStateOf(dubbingGroups.firstOrNull()?.key)
+        mutableStateOf(
+            preferredDubbing
+                ?.takeIf { preferred -> dubbingGroups.any { it.key == preferred } }
+                ?: dubbingGroups.firstOrNull()?.key,
+        )
     }
     val selectedDubbingEpisodes = dubbingGroups
         .firstOrNull { it.key == selectedDubbing }
@@ -773,7 +860,11 @@ private fun DetailsContent(
             )
     }
     var selectedPlayer by remember(release.id, selectedDubbing) {
-        mutableStateOf(playerGroups.firstOrNull()?.key)
+        mutableStateOf(
+            playerGroups.firstOrNull {
+                it.key.contains(preferredSourceName, ignoreCase = true)
+            }?.key ?: playerGroups.firstOrNull()?.key,
+        )
     }
     val selectedEpisodes = playerGroups
         .firstOrNull { it.key == selectedPlayer }

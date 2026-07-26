@@ -10,8 +10,13 @@ import dev.aniliberty.desktop.data.AccountRepository
 import dev.aniliberty.desktop.data.AnimeListKind
 import dev.aniliberty.desktop.data.AnimeMembership
 import dev.aniliberty.desktop.data.NetworkAccountRepository
+import dev.aniliberty.desktop.data.PlayerPreferences
 import dev.aniliberty.desktop.data.ReleaseRepository
+import dev.aniliberty.desktop.data.ResumeBehavior
+import dev.aniliberty.desktop.data.UserDataStore
+import dev.aniliberty.desktop.data.WatchProgress
 import dev.aniliberty.desktop.data.YaniApiException
+import dev.aniliberty.desktop.data.isWatched
 import dev.aniliberty.desktop.model.EpisodeDto
 import dev.aniliberty.desktop.model.HomeFeed
 import dev.aniliberty.desktop.model.ReleaseDto
@@ -22,6 +27,7 @@ sealed interface AppRoute {
     data object Catalog : AppRoute
     data object Search : AppRoute
     data object Library : AppRoute
+    data object Settings : AppRoute
     data class Details(val releaseId: Int) : AppRoute
     data class Player(val releaseId: Int, val episodeId: String) : AppRoute
 }
@@ -29,6 +35,13 @@ sealed interface AppRoute {
 data class PlaybackSession(
     val release: ReleaseDto,
     val episode: EpisodeDto,
+    val resumeSeconds: Double = 0.0,
+)
+
+data class PendingResume(
+    val release: ReleaseDto,
+    val episode: EpisodeDto,
+    val positionSeconds: Double,
 )
 
 sealed interface UiState<out T> {
@@ -47,6 +60,7 @@ sealed interface AccountState {
 class AppController(
     private val repository: ReleaseRepository,
     private val accountRepository: AccountRepository = NetworkAccountRepository(),
+    private val userDataStore: UserDataStore = UserDataStore(),
 ) {
     private var homeLoading = false
     private var routeBeforeSearch: AppRoute = AppRoute.Home
@@ -83,6 +97,31 @@ class AppController(
 
     var playbackSession: PlaybackSession? by mutableStateOf(null)
         private set
+
+    var preferences: PlayerPreferences by mutableStateOf(userDataStore.snapshot().preferences)
+        private set
+
+    var watchHistory: List<WatchProgress> by mutableStateOf(userDataStore.snapshot().history)
+        private set
+
+    var lastQuality: String? by mutableStateOf(userDataStore.snapshot().lastQuality)
+        private set
+
+    var pendingResume: PendingResume? by mutableStateOf(null)
+        private set
+
+    val continueWatching: List<WatchProgress>
+        get() = watchHistory
+            .filterNot(WatchProgress::watched)
+            .distinctBy(WatchProgress::releaseId)
+            .take(12)
+
+    fun preferredDubbing(releaseId: Int): String? =
+        userDataStore.snapshot().lastDubbingByRelease[releaseId]
+
+    fun preferredSource(releaseId: Int): String =
+        userDataStore.snapshot().lastSourceByRelease[releaseId]
+            ?: preferences.preferredSource.displayName
 
     var playerMessage: String? by mutableStateOf(null)
         private set
@@ -220,6 +259,12 @@ class AppController(
         playbackSession = null
     }
 
+    fun showSettings() {
+        route = AppRoute.Settings
+        searchQuery = ""
+        playbackSession = null
+    }
+
     suspend fun showLibrary(force: Boolean = false) {
         val profile = (accountState as? AccountState.SignedIn)?.profile
         if (profile == null) {
@@ -328,6 +373,7 @@ class AppController(
             AppRoute.Catalog,
             AppRoute.Search,
             AppRoute.Library,
+            AppRoute.Settings,
             -> detailsReturnRoute = route
 
             else -> Unit
@@ -409,9 +455,84 @@ class AppController(
             return
         }
 
-        playbackSession = PlaybackSession(release, episode)
-        route = AppRoute.Player(release.id, episode.id)
+        val progress = watchHistory.firstOrNull {
+            it.releaseId == release.id && it.episodeId == episode.id
+        }
+        val resumeSeconds = progress?.resumablePositionSeconds ?: 0.0
+        when {
+            resumeSeconds <= 0.0 || preferences.resumeBehavior == ResumeBehavior.Restart ->
+                startPlayback(release, episode, 0.0)
+            preferences.resumeBehavior == ResumeBehavior.Automatically ->
+                startPlayback(release, episode, resumeSeconds)
+            else -> pendingResume = PendingResume(release, episode, resumeSeconds)
+        }
     }
+
+    fun resolveResume(resume: Boolean) {
+        val pending = pendingResume ?: return
+        pendingResume = null
+        startPlayback(
+            pending.release,
+            pending.episode,
+            if (resume) pending.positionSeconds else 0.0,
+        )
+    }
+
+    suspend fun continueWatching(progress: WatchProgress) {
+        showDetails(progress.releaseId)
+        val release = (detailsState as? UiState.Ready)?.value ?: return
+        val episode = release.episodes.firstOrNull { it.id == progress.episodeId }
+            ?: release.episodes.firstOrNull {
+                it.ordinal == progress.episodeOrdinal &&
+                    it.name == progress.dubbing &&
+                    it.displayPlayerName == progress.source
+            }
+            ?: return
+        playEpisode(episode)
+    }
+
+    fun updatePreferences(value: PlayerPreferences) {
+        preferences = userDataStore.updatePreferences(value).preferences
+    }
+
+    fun recordPlayback(
+        positionSeconds: Double,
+        durationSeconds: Double,
+        volume: Float,
+        quality: String?,
+    ) {
+        val session = playbackSession ?: return
+        if (!positionSeconds.isFinite() || !durationSeconds.isFinite()) return
+        val progress = WatchProgress(
+            releaseId = session.release.id,
+            releaseTitle = session.release.displayName,
+            episodeId = session.episode.id,
+            episodeOrdinal = session.episode.ordinal,
+            episodeTitle = session.episode.shortTitle,
+            dubbing = session.episode.name.orEmpty(),
+            source = session.episode.displayPlayerName,
+            positionSeconds = positionSeconds.coerceAtLeast(0.0),
+            durationSeconds = durationSeconds.coerceAtLeast(0.0),
+            updatedAtEpochMillis = System.currentTimeMillis(),
+            imageUrl = session.episode.previewUrl ?: session.release.backdropUrl,
+            watched = isWatched(positionSeconds, durationSeconds),
+        )
+        watchHistory = userDataStore.updateProgress(progress).history
+
+        val normalizedVolume = volume.coerceIn(0f, 1f)
+        if (kotlin.math.abs(preferences.startupVolume - normalizedVolume) >= 0.01f) {
+            updatePreferences(preferences.copy(startupVolume = normalizedVolume))
+        }
+        if (!quality.isNullOrBlank() && quality != lastQuality) {
+            lastQuality = userDataStore.updateQuality(quality).lastQuality
+        }
+    }
+
+    fun clearHistory() {
+        watchHistory = userDataStore.clearHistory().history
+    }
+
+    fun clearCaches(): Boolean = clearHoshiraCaches()
 
     fun closePlayer() {
         val releaseId = playbackSession?.release?.id ?: return showHome()
@@ -486,6 +607,15 @@ class AppController(
     private var catalogOffset: Int = 0
     private var detailsReturnRoute: AppRoute = AppRoute.Home
     private var libraryLoaded: Boolean = false
+
+    private fun startPlayback(
+        release: ReleaseDto,
+        episode: EpisodeDto,
+        resumeSeconds: Double,
+    ) {
+        playbackSession = PlaybackSession(release, episode, resumeSeconds)
+        route = AppRoute.Player(release.id, episode.id)
+    }
 }
 
 private const val CATALOG_PAGE_SIZE = 30

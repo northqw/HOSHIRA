@@ -23,6 +23,11 @@ internal fun applyHoshiraWindowBackground(window: Frame) {
     }
 }
 
+internal fun setHoshiraWindowFullscreen(
+    window: Frame,
+    fullscreen: Boolean,
+): Boolean = false
+
 private fun loadApplicationIcon(): java.awt.Image? =
     runCatching {
         object {}.javaClass.getResourceAsStream("/icons/hoshira.png")

@@ -17,6 +17,11 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.aniliberty.desktop.data.NetworkReleaseRepository
 import dev.aniliberty.desktop.ui.HoshiraApp
+import java.awt.Dimension
+import java.awt.GraphicsConfiguration
+import java.awt.GraphicsEnvironment
+import java.awt.Rectangle
+import java.awt.Toolkit
 import kotlinx.coroutines.delay
 
 fun main() {
@@ -27,12 +32,20 @@ fun main() {
     System.setProperty("sun.awt.erasebackgroundonresize", "false")
 
     application {
+        val windowSizing = remember {
+            calculateWindowSizing(
+                defaultGraphicsConfiguration().workingArea(),
+            )
+        }
         val windowState = rememberWindowState(
-            size = DpSize(1480.dp, 930.dp),
+            size = windowSizing.initialSize,
             position = WindowPosition(Alignment.Center),
         )
         var placementBeforeFullscreen by remember {
             mutableStateOf(WindowPlacement.Floating)
+        }
+        var isFullscreen by remember {
+            mutableStateOf(false)
         }
         // The application controller uses the repository as its remember key.
         // Keep this instance stable across window recompositions (for example
@@ -45,7 +58,7 @@ fun main() {
             title = "Hoshira",
             state = windowState,
         ) {
-            window.minimumSize = java.awt.Dimension(1080, 720)
+            window.minimumSize = windowSizing.minimumSize
             applyHoshiraWindowBackground(window)
 
             LaunchedEffect(window) {
@@ -55,19 +68,80 @@ fun main() {
 
             HoshiraApp(
                 repository = repository,
-                isFullscreen = windowState.placement == WindowPlacement.Fullscreen,
-                onFullscreenChange = { fullscreen ->
-                    if (fullscreen) {
+                isFullscreen = isFullscreen,
+                onFullscreenChange = { requestedFullscreen ->
+                    if (requestedFullscreen == isFullscreen) {
+                        return@HoshiraApp
+                    }
+
+                    val handledByPlatform = setHoshiraWindowFullscreen(
+                        window = window,
+                        fullscreen = requestedFullscreen,
+                    )
+                    if (!handledByPlatform && requestedFullscreen) {
                         if (windowState.placement != WindowPlacement.Fullscreen) {
                             placementBeforeFullscreen = windowState.placement
                             windowState.placement = WindowPlacement.Fullscreen
                         }
-                    } else if (windowState.placement == WindowPlacement.Fullscreen) {
+                    } else if (
+                        !handledByPlatform &&
+                        windowState.placement == WindowPlacement.Fullscreen
+                    ) {
                         windowState.placement = placementBeforeFullscreen
                     }
+                    isFullscreen = requestedFullscreen
                 },
                 modifier = Modifier.fillMaxSize(),
             )
         }
     }
 }
+
+internal data class DesktopWindowSizing(
+    val initialSize: DpSize,
+    val minimumSize: Dimension,
+)
+
+internal fun calculateWindowSizing(workArea: Rectangle): DesktopWindowSizing {
+    val availableWidth = workArea.width.coerceAtLeast(1)
+    val availableHeight = workArea.height.coerceAtLeast(1)
+    val initialWidth = minOf(
+        DEFAULT_WINDOW_WIDTH,
+        (availableWidth * WINDOW_WORK_AREA_FRACTION).toInt().coerceAtLeast(1),
+    )
+    val initialHeight = minOf(
+        DEFAULT_WINDOW_HEIGHT,
+        (availableHeight * WINDOW_WORK_AREA_FRACTION).toInt().coerceAtLeast(1),
+    )
+
+    return DesktopWindowSizing(
+        initialSize = DpSize(initialWidth.dp, initialHeight.dp),
+        minimumSize = Dimension(
+            minOf(MINIMUM_WINDOW_WIDTH, initialWidth),
+            minOf(MINIMUM_WINDOW_HEIGHT, initialHeight),
+        ),
+    )
+}
+
+private fun defaultGraphicsConfiguration(): GraphicsConfiguration =
+    GraphicsEnvironment
+        .getLocalGraphicsEnvironment()
+        .defaultScreenDevice
+        .defaultConfiguration
+
+private fun GraphicsConfiguration.workingArea(): Rectangle {
+    val screenBounds = bounds
+    val insets = Toolkit.getDefaultToolkit().getScreenInsets(this)
+    return Rectangle(
+        screenBounds.x + insets.left,
+        screenBounds.y + insets.top,
+        (screenBounds.width - insets.left - insets.right).coerceAtLeast(1),
+        (screenBounds.height - insets.top - insets.bottom).coerceAtLeast(1),
+    )
+}
+
+private const val DEFAULT_WINDOW_WIDTH = 1480
+private const val DEFAULT_WINDOW_HEIGHT = 930
+private const val MINIMUM_WINDOW_WIDTH = 720
+private const val MINIMUM_WINDOW_HEIGHT = 480
+private const val WINDOW_WORK_AREA_FRACTION = 0.94

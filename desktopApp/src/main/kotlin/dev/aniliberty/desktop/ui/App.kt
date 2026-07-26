@@ -71,6 +71,7 @@ import dev.aniliberty.desktop.AppController
 import dev.aniliberty.desktop.AppRoute
 import dev.aniliberty.desktop.AccountState
 import dev.aniliberty.desktop.platformCacheDirectory
+import dev.aniliberty.desktop.isPortableMode
 import dev.aniliberty.desktop.data.AccountProfile
 import dev.aniliberty.desktop.data.ReleaseRepository
 import kotlinx.coroutines.async
@@ -157,9 +158,13 @@ fun HoshiraApp(
                 when (val currentRoute = route) {
                 AppRoute.Home -> HomeScreen(
                     state = controller.homeState,
+                    continueWatching = controller.continueWatching,
                     onRetry = { scope.launch { controller.loadHome(force = true) } },
                     onOpenRelease = { id -> scope.launch { controller.showDetails(id) } },
                     onPlay = { release -> scope.launch { controller.showDetails(release.id) } },
+                    onContinueWatching = { progress ->
+                        scope.launch { controller.continueWatching(progress) }
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
 
@@ -214,6 +219,15 @@ fun HoshiraApp(
                     }
                 }
 
+                AppRoute.Settings -> SettingsScreen(
+                    preferences = controller.preferences,
+                    portableMode = isPortableMode(),
+                    onChange = controller::updatePreferences,
+                    onClearHistory = controller::clearHistory,
+                    onClearCaches = { controller.clearCaches() },
+                    modifier = Modifier.fillMaxSize(),
+                )
+
                 is AppRoute.Details -> DetailsScreen(
                     state = controller.detailsState,
                     membershipState = controller.animeMembershipState,
@@ -224,6 +238,8 @@ fun HoshiraApp(
                         scope.launch { controller.showDetails(currentRoute.releaseId) }
                     },
                     onPlayEpisode = controller::playEpisode,
+                    preferredDubbing = controller.preferredDubbing(currentRoute.releaseId),
+                    preferredSourceName = controller.preferredSource(currentRoute.releaseId),
                     onSetAnimeList = { list ->
                         scope.launch { controller.setAnimeList(list) }
                     },
@@ -237,6 +253,9 @@ fun HoshiraApp(
                     session = controller.playbackSession,
                     onBack = controller::closePlayer,
                     onPlayEpisode = controller::playEpisode,
+                    preferences = controller.preferences,
+                    preferredQuality = controller.lastQuality,
+                    onPlayback = controller::recordPlayback,
                     isFullscreen = isFullscreen,
                     onFullscreenChange = onFullscreenChange,
                     modifier = Modifier.fillMaxSize(),
@@ -250,6 +269,7 @@ fun HoshiraApp(
                         onQueryChange = controller::updateSearchQuery,
                         onHome = controller::showHome,
                         onCatalog = controller::showCatalog,
+                        onSettings = controller::showSettings,
                         accountProfile = accountProfile,
                         onAccount = {
                             if (accountProfile != null) {
@@ -291,6 +311,33 @@ fun HoshiraApp(
             )
         }
 
+        controller.pendingResume?.let { pending ->
+            AlertDialog(
+                onDismissRequest = { controller.resolveResume(false) },
+                containerColor = AniColors.Surface,
+                titleContentColor = AniColors.Text,
+                textContentColor = AniColors.TextMuted,
+                title = { Text("Продолжить просмотр?") },
+                text = {
+                    Text(
+                        "${pending.episode.shortTitle} · продолжить с ${
+                            formatResumeTime(pending.positionSeconds)
+                        }?",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { controller.resolveResume(true) }) {
+                        Text("Продолжить", color = AniColors.OrangeBright)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { controller.resolveResume(false) }) {
+                        Text("С начала", color = AniColors.TextMuted)
+                    }
+                },
+            )
+        }
+
         if (controller.accountDialogVisible) {
             AccountDialog(
                 state = controller.accountState,
@@ -325,6 +372,7 @@ private fun TopNavigation(
     onQueryChange: (String) -> Unit,
     onHome: () -> Unit,
     onCatalog: () -> Unit,
+    onSettings: () -> Unit,
     accountProfile: AccountProfile?,
     onAccount: () -> Unit,
     modifier: Modifier = Modifier,
@@ -349,6 +397,28 @@ private fun TopNavigation(
             .height(144.dp),
     ) {
         val availableWidth = maxWidth
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .zIndex(2f)
+                .padding(
+                    top = 26.dp,
+                    end = if (availableWidth < 1180.dp) 82.dp else 106.dp,
+                )
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color(0xE008090B))
+                .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .clickable(onClick = onSettings),
+            contentAlignment = Alignment.Center,
+        ) {
+            SettingsGlyph(
+                modifier = Modifier.size(20.dp),
+                color = AniColors.Text,
+            )
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -497,6 +567,11 @@ private fun TopNavigation(
             }
         }
     }
+}
+
+private fun formatResumeTime(seconds: Double): String {
+    val total = seconds.toInt().coerceAtLeast(0)
+    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
 }
 
 @Composable
@@ -666,6 +741,41 @@ private fun SearchGlyph(
             strokeWidth = strokeWidth,
             cap = StrokeCap.Round,
         )
+    }
+}
+
+@Composable
+private fun SettingsGlyph(
+    modifier: Modifier = Modifier,
+    color: Color,
+) {
+    Canvas(modifier) {
+        val strokeWidth = 1.8.dp.toPx()
+        val positions = listOf(
+            0.28f to 0.32f,
+            0.72f to 0.5f,
+            0.42f to 0.68f,
+        )
+        positions.forEach { (knobX, y) ->
+            val yPx = size.height * y
+            drawLine(
+                color = color,
+                start = Offset(size.width * 0.1f, yPx),
+                end = Offset(size.width * 0.9f, yPx),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round,
+            )
+            drawCircle(
+                color = AniColors.Background,
+                radius = strokeWidth * 1.45f,
+                center = Offset(size.width * knobX, yPx),
+            )
+            drawCircle(
+                color = color,
+                radius = strokeWidth,
+                center = Offset(size.width * knobX, yPx),
+            )
+        }
     }
 }
 
