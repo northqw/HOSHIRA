@@ -104,7 +104,7 @@ class HlsStreamResolverTest {
                 "kodikplayer.com/season/" to
                     """
                     <script>
-                      const videoId = "116621";
+                      const serialId = Number(999999);
                       const secure = '{"d":"kodikplayer.com","d_sign":"d-sign","pd":"kodikplayer.com","pd_sign":"pd-sign","ref":"%2Fwatch%3Fepisode%3D1","ref_sign":"ref-sign"}';
                     </script>
                     <script src="/assets/js/app.player_single.test.js"></script>

@@ -216,29 +216,32 @@ internal class HlsStreamResolver(
             """(?:videoId\s*=\s*["']${Regex.escape(videoId)}["']|""" +
                 """serialId\s*=\s*Number\(\s*${Regex.escape(videoId)}\s*\))""",
         )
-        val secureScript = KODIK_INLINE_SCRIPT_REGEX
+        val scripts = KODIK_INLINE_SCRIPT_REGEX
             .findAll(page)
             .map { it.groupValues[1] }
-            .firstOrNull(marker::containsMatchIn)
-            ?: throw HlsResolutionException(
-                "Kodik не вернул подписанные параметры текущего видео.",
-            )
-        val secureJson = KODIK_SECURE_JSON_REGEX.find(secureScript)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
-            ?: throw HlsResolutionException(
-                "Kodik изменил формат подписанных параметров.",
-            )
-        return try {
-            json.decodeFromString<KodikSecureData>(secureJson)
-        } catch (error: Exception) {
-            throw HlsResolutionException(
-                "Kodik вернул некорректные подписанные параметры.",
-                error,
-            )
+            .toList()
+        val prioritizedScripts = scripts
+            .filter(marker::containsMatchIn)
+            .plus(scripts)
+            .distinct()
+        for (script in prioritizedScripts) {
+            for (match in KODIK_SECURE_JSON_REGEX.findAll(script)) {
+                val secureJson = match.groupValues
+                    .getOrNull(1)
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
+                    ?: continue
+                val secureData = runCatching {
+                    json.decodeFromString<KodikSecureData>(secureJson)
+                }.getOrNull()
+                if (secureData != null) {
+                    return secureData
+                }
+            }
         }
+        throw HlsResolutionException(
+            "Kodik не вернул подписанные параметры текущего видео.",
+        )
     }
 
     private inline fun <reified T> request(url: String): T {
