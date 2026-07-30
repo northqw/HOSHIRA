@@ -106,6 +106,10 @@ class HlsStreamResolverTest {
                     <script>
                       const serialId = Number(999999);
                       const secure = '{"d":"kodikplayer.com","d_sign":"d-sign","pd":"kodikplayer.com","pd_sign":"pd-sign","ref":"%2Fwatch%3Fepisode%3D1","ref_sign":"ref-sign"}';
+                      const vInfo = {};
+                      vInfo.type = 'seria';
+                      vInfo.id = Number(7654321);
+                      vInfo.hash = 'fedcba9876543210fedcba9876543210';
                     </script>
                     <script src="/assets/js/app.player_single.test.js"></script>
                     """.trimIndent(),
@@ -125,9 +129,9 @@ class HlsStreamResolverTest {
         assertEquals(expectedUrl, source.url)
         assertTrue(client.postRequests.isEmpty())
         val endpointRequest = client.requests.single { "/ftor?" in it }
-        assertTrue("type=season" in endpointRequest)
-        assertTrue("id=116621" in endpointRequest)
-        assertTrue("hash=abcdef0123456789abcdef0123456789" in endpointRequest)
+        assertTrue("type=seria" in endpointRequest)
+        assertTrue("id=7654321" in endpointRequest)
+        assertTrue("hash=fedcba9876543210fedcba9876543210" in endpointRequest)
     }
 
     @Test
@@ -140,6 +144,14 @@ class HlsStreamResolverTest {
                     <script>
                       const serialId = Number(999999);
                       const secure = '{"d":"kodikplayer.com","d_sign":"d-sign","pd":"kodikplayer.com","pd_sign":"pd-sign","ref":"%2Fwatch%3Ftoken%3Da+b","ref_sign":"ref-sign"}';
+                      const vInfo = {
+                        type: 'seria',
+                        id: 7654321,
+                        hash: 'fedcba9876543210fedcba9876543210',
+                        link: 'https:\/\/media.example\/episode',
+                        secret: 'secret\u002Dvalue',
+                        uid: 'viewer-42'
+                      };
                     </script>
                     <script src="/assets/js/app.player_single.test.js"></script>
                     """.trimIndent(),
@@ -157,10 +169,10 @@ class HlsStreamResolverTest {
 
         assertEquals(expectedUrl, source.url)
         assertEquals(1, client.postRequests.size)
-        assertEquals("season", client.postRequests.single().body["type"])
-        assertEquals("116621", client.postRequests.single().body["id"])
+        assertEquals("seria", client.postRequests.single().body["type"])
+        assertEquals("7654321", client.postRequests.single().body["id"])
         assertEquals(
-            "abcdef0123456789abcdef0123456789",
+            "fedcba9876543210fedcba9876543210",
             client.postRequests.single().body["hash"],
         )
         assertEquals("d-sign", client.postRequests.single().body["d_sign"])
@@ -169,6 +181,12 @@ class HlsStreamResolverTest {
         assertEquals("/watch?token=a+b", client.postRequests.single().body["ref"])
         assertEquals("false", client.postRequests.single().body["bad_user"])
         assertEquals("true", client.postRequests.single().body["cdn_is_working"])
+        assertEquals(
+            "https://media.example/episode",
+            client.postRequests.single().body["link"],
+        )
+        assertEquals("secret-value", client.postRequests.single().body["secret"])
+        assertEquals("viewer-42", client.postRequests.single().body["uid"])
         assertEquals(
             "https://kodikplayer.com/season/116621/" +
                 "abcdef0123456789abcdef0123456789/720p?episode=1",

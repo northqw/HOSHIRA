@@ -151,6 +151,14 @@ internal class HlsStreamResolver(
         debug(
             "Kodik secure data parsed refPresent=${secureData.ref.isNotBlank()}",
         )
+        val videoInfo = parseKodikVideoInfo(page, reference)
+        debug(
+            "Kodik vInfo parsed type=${videoInfo.type} id=${videoInfo.id} " +
+                "pathMatch=${videoInfo.matches(reference)} " +
+                "linkPresent=${videoInfo.link != null} " +
+                "secretPresent=${videoInfo.secret != null} " +
+                "uidPresent=${videoInfo.uid != null}",
+        )
         val playerPath = KODIK_PLAYER_SCRIPT_REGEX.find(page)
             ?.groupValues
             ?.getOrNull(1)
@@ -184,9 +192,9 @@ internal class HlsStreamResolver(
         val currentRequestUrl = buildString {
             append(endpointUrl)
             append(if ('?' in endpointUrl) '&' else '?')
-            append("type=${reference.type.urlEncode()}")
-            append("&id=${reference.id.urlEncode()}")
-            append("&hash=${reference.hash.urlEncode()}")
+            append("type=${videoInfo.type.urlEncode()}")
+            append("&id=${videoInfo.id.urlEncode()}")
+            append("&hash=${videoInfo.hash.urlEncode()}")
         }
         debug("Kodik request mode=GET queryKeys=type,id,hash")
         val response = try {
@@ -200,23 +208,28 @@ internal class HlsStreamResolver(
                 "Kodik GET failed type=${currentError::class.simpleName} " +
                     "message=${currentError.message}; trying legacy POST",
             )
+            val legacyBody = linkedMapOf(
+                "d" to secureData.d,
+                "d_sign" to secureData.dSign,
+                "pd" to secureData.pd,
+                "pd_sign" to secureData.pdSign,
+                "ref" to secureData.ref.decodeURIComponentOrSelf(),
+                "ref_sign" to secureData.refSign,
+                "type" to videoInfo.type,
+                "hash" to videoInfo.hash,
+                "id" to videoInfo.id,
+                "bad_user" to "false",
+                "cdn_is_working" to "true",
+            ).apply {
+                videoInfo.link?.let { put("link", it) }
+                videoInfo.secret?.let { put("secret", it) }
+                videoInfo.uid?.let { put("uid", it) }
+            }
+            debug("Kodik request mode=POST bodyKeys=${legacyBody.keys.joinToString(",")}")
             requestJson<KodikPlayerResponse>(
                 url = endpointUrl,
                 providerName = "Kodik",
-                body = mapOf(
-                    "d" to secureData.d,
-                    "d_sign" to secureData.dSign,
-                    "pd" to secureData.pd,
-                    "pd_sign" to secureData.pdSign,
-                    "ref" to secureData.ref.decodeURIComponentOrSelf(),
-                    "ref_sign" to secureData.refSign,
-                    "type" to reference.type,
-                    "hash" to reference.hash,
-                    "id" to reference.id,
-                    "bad_user" to "false",
-                    "info" to "{}",
-                    "cdn_is_working" to "true",
-                ),
+                body = legacyBody,
                 headers = playerHeaders,
             )
         }
@@ -265,6 +278,39 @@ internal class HlsStreamResolver(
         }
         throw HlsResolutionException(
             "Kodik не вернул подписанные параметры текущего видео.",
+        )
+    }
+
+    private fun parseKodikVideoInfo(
+        page: String,
+        fallback: KodikReference,
+    ): KodikVideoInfo {
+        val objectBody = KODIK_VINFO_OBJECT_REGEX.find(page)
+            ?.groupValues
+            ?.getOrNull(1)
+        fun field(name: String): String? {
+            val escapedName = Regex.escape(name)
+            val assignment = Regex(
+                """\bvInfo(?:\.$escapedName|\[\s*["']$escapedName["']\s*])""" +
+                    """\s*=\s*$KODIK_JS_VALUE_PATTERN""",
+            ).find(page)
+            if (assignment != null) {
+                return assignment.kodikJavaScriptValue()
+            }
+            if (objectBody == null) return null
+            return Regex(
+                """(?:^|,)\s*["']?$escapedName["']?\s*:\s*""" +
+                    KODIK_JS_VALUE_PATTERN,
+            ).find(objectBody)?.kodikJavaScriptValue()
+        }
+
+        return KodikVideoInfo(
+            type = field("type")?.takeIf(String::isNotBlank) ?: fallback.type,
+            id = field("id")?.takeIf(String::isNotBlank) ?: fallback.id,
+            hash = field("hash")?.takeIf(String::isNotBlank) ?: fallback.hash,
+            link = field("link")?.takeIf(String::isNotBlank),
+            secret = field("secret")?.takeIf(String::isNotBlank),
+            uid = field("uid")?.takeIf(String::isNotBlank),
         )
     }
 
@@ -460,6 +506,20 @@ private data class KodikReference(
     val id: String,
     val hash: String,
 )
+
+private data class KodikVideoInfo(
+    val type: String,
+    val id: String,
+    val hash: String,
+    val link: String?,
+    val secret: String?,
+    val uid: String?,
+) {
+    fun matches(reference: KodikReference): Boolean =
+        type == reference.type &&
+            id == reference.id &&
+            hash == reference.hash
+}
 
 @Serializable
 private data class KodikSecureData(
@@ -710,6 +770,59 @@ private fun String.decodeURIComponentOrSelf(): String =
         )
     }.getOrDefault(this)
 
+private fun MatchResult.kodikJavaScriptValue(): String? {
+    val stringValue = groups[1]?.value ?: groups[2]?.value
+    if (stringValue != null) {
+        return stringValue.decodeJavaScriptString()
+    }
+    return groups[3]?.value ?: groups[4]?.value
+}
+
+private fun String.decodeJavaScriptString(): String {
+    val result = StringBuilder(length)
+    var index = 0
+    while (index < length) {
+        val current = this[index++]
+        if (current != '\\' || index >= length) {
+            result.append(current)
+            continue
+        }
+        val escaped = this[index++]
+        when (escaped) {
+            '\\', '/', '"', '\'' -> result.append(escaped)
+            'b' -> result.append('\b')
+            'f' -> result.append('\u000C')
+            'n' -> result.append('\n')
+            'r' -> result.append('\r')
+            't' -> result.append('\t')
+            'u', 'x' -> {
+                val digitCount = if (escaped == 'u') 4 else 2
+                val end = index + digitCount
+                val decoded = takeIf { end <= length }
+                    ?.substring(index, end)
+                    ?.takeIf { digits ->
+                        digits.all {
+                            it in '0'..'9' ||
+                                it in 'a'..'f' ||
+                                it in 'A'..'F'
+                        }
+                    }
+                    ?.toIntOrNull(16)
+                if (decoded == null) {
+                    result.append('\\').append(escaped)
+                } else {
+                    result.append(decoded.toChar())
+                    index = end
+                }
+            }
+            '\n' -> Unit
+            '\r' -> if (index < length && this[index] == '\n') index++
+            else -> result.append(escaped)
+        }
+    }
+    return result.toString()
+}
+
 private const val VIDEO_HUB_API = "https://plapi.cdnvideohub.com/api/v1"
 private const val VIDEO_HUB_PUBLISHER = 745
 private const val VIDEO_HUB_AGGREGATOR = "mali"
@@ -730,6 +843,11 @@ private val KODIK_SECURE_JSON_REGEX = Regex(
     """'\s*(\{[^']+})\s*'""",
     setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
 )
+private val KODIK_VINFO_OBJECT_REGEX = Regex(
+    """\bvInfo\s*=\s*\{([\s\S]*?)}\s*;""",
+)
+private const val KODIK_JS_VALUE_PATTERN =
+    """(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|Number\(\s*(\d+)\s*\)|(\d+))"""
 private val KODIK_ENDPOINT_REGEX = Regex(
     """url:\s*atob\(["']([A-Za-z0-9+/=]+)["']\)""",
 )
