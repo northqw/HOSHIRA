@@ -138,7 +138,7 @@ class HlsStreamResolverTest {
         assertEquals("true", client.postRequests.single().body["cdn_is_working"])
         assertEquals(
             "https://kodikplayer.com/season/116621/" +
-                "abcdef0123456789abcdef0123456789/360p",
+                "abcdef0123456789abcdef0123456789/720p?episode=1",
             client.postRequests.single().headers["Referer"],
         )
     }

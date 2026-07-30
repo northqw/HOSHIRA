@@ -1,6 +1,8 @@
 package dev.aniliberty.desktop.data
 
 import java.net.HttpURLConnection
+import java.net.CookieManager
+import java.net.CookiePolicy
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -191,7 +193,7 @@ internal class HlsStreamResolver(
             headers = mapOf(
                 "Accept" to "application/json, text/javascript, */*; q=0.01",
                 "Origin" to reference.origin.toASCIIString().trimEnd('/'),
-                "Referer" to reference.playerReferer(),
+                "Referer" to pageUrl,
                 "User-Agent" to BROWSER_USER_AGENT,
                 "X-Requested-With" to "XMLHttpRequest",
             ),
@@ -320,6 +322,8 @@ internal interface HlsHttpClient {
 }
 
 private object UrlConnectionHlsHttpClient : HlsHttpClient {
+    private val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL)
+
     override fun get(url: String, headers: Map<String, String>): String {
         return request(url, "GET", headers, null)
     }
@@ -348,11 +352,18 @@ private object UrlConnectionHlsHttpClient : HlsHttpClient {
         headers: Map<String, String>,
         body: ByteArray?,
     ): String {
-        val connection = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
+        val uri = URI(url)
+        val sessionHeaders = synchronized(cookieManager) {
+            cookieManager.get(uri, emptyMap())
+        }
+        val connection = (uri.toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             instanceFollowRedirects = true
+            sessionHeaders.forEach { (name, values) ->
+                values.forEach { value -> addRequestProperty(name, value) }
+            }
             headers.forEach(::setRequestProperty)
             if (body != null) {
                 doOutput = true
@@ -364,6 +375,14 @@ private object UrlConnectionHlsHttpClient : HlsHttpClient {
                 connection.outputStream.use { it.write(body) }
             }
             val statusCode = connection.responseCode
+            synchronized(cookieManager) {
+                cookieManager.put(
+                    uri,
+                    connection.headerFields.entries
+                        .filter { it.key != null }
+                        .associate { it.key to it.value },
+                )
+            }
             val response = (if (statusCode in 200..299) {
                 connection.inputStream
             } else {
@@ -526,9 +545,6 @@ private fun URI.toKodikReference(): KodikReference? {
         hash = hash,
     )
 }
-
-private fun KodikReference.playerReferer(): String =
-    origin.resolve("/$type/$id/$hash/360p").toASCIIString()
 
 private fun URI.isAllohaPlayer(): Boolean {
     val normalizedHost = host?.lowercase(Locale.ROOT) ?: return false
