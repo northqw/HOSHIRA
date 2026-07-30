@@ -30,6 +30,16 @@ fun main() {
     // a single white frame between the Compose loader and native media surface.
     System.setProperty("sun.awt.noerasebackground", "true")
     System.setProperty("sun.awt.erasebackgroundonresize", "false")
+    if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
+        // Compose Desktop and JavaFX would otherwise both create Direct3D
+        // surfaces in the same Swing hierarchy. JFXPanel can keep playing
+        // audio while its off-screen D3D surface remains black. The software
+        // Prism compositor keeps the JavaFX scene, video and controls visible.
+        System.setProperty(
+            "prism.order",
+            System.getProperty("hoshira.javafx.prism", "sw"),
+        )
+    }
 
     application {
         val windowSizing = remember {

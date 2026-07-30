@@ -5,6 +5,7 @@ import dev.aniliberty.desktop.data.hlsDebugUrl
 import java.awt.BorderLayout
 import java.awt.Color as AwtColor
 import java.awt.EventQueue
+import java.awt.event.MouseMotionAdapter
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javafx.animation.PauseTransition
@@ -52,6 +53,7 @@ internal class NativeDesktopPlayerPanel(
     private val debugSession = HlsDebugSession()
     private val resolver = HlsStreamResolver(debug = debugSession::record)
     private val started = AtomicBoolean(false)
+    private val sceneInstalled = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
     private val generation = AtomicLong()
 
@@ -95,16 +97,37 @@ internal class NativeDesktopPlayerPanel(
     init {
         background = AwtColor.BLACK
         add(fxPanel, BorderLayout.CENTER)
-        Platform.runLater {
-            Platform.setImplicitExit(false)
-            installScene()
-        }
+        fxPanel.addMouseMotionListener(
+            object : MouseMotionAdapter() {
+                override fun mouseMoved(event: java.awt.event.MouseEvent?) {
+                    Platform.runLater { showControls() }
+                }
+
+                override fun mouseDragged(event: java.awt.event.MouseEvent?) {
+                    Platform.runLater { showControls(permanent = true) }
+                }
+            },
+        )
     }
 
     override fun addNotify() {
         super.addNotify()
-        if (started.compareAndSet(false, true)) {
-            startResolution()
+        // JFXPanel must have a Swing peer before its JavaFX scene is attached.
+        // Creating the scene in the constructor races Compose's SwingPanel
+        // mounting and may leave only MediaPlayer audio active.
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            Platform.runLater {
+                if (disposed.get()) return@runLater
+                Platform.setImplicitExit(false)
+                if (sceneInstalled.compareAndSet(false, true)) {
+                    installScene()
+                }
+                if (started.compareAndSet(false, true)) {
+                    startResolution()
+                }
+                requestSurfaceRepaint()
+            }
         }
     }
 
@@ -209,6 +232,7 @@ internal class NativeDesktopPlayerPanel(
         fxPanel.scene = Scene(sceneRoot, Color.BLACK)
         updateChrome(requestedChrome)
         showResolving("Получаем прямой HLS-поток…")
+        requestSurfaceRepaint()
     }
 
     private fun createChrome(): StackPane {
@@ -330,6 +354,12 @@ internal class NativeDesktopPlayerPanel(
     private fun startResolution() {
         val currentGeneration = generation.incrementAndGet()
         debugSession.restart()
+        debugSession.record(
+            "JavaFX surface displayable=${fxPanel.isDisplayable} " +
+                "showing=${fxPanel.isShowing} size=${fxPanel.width}x${fxPanel.height} " +
+                "sceneInstalled=${sceneInstalled.get()} " +
+                "prism=${System.getProperty("prism.order", "default")}",
+        )
         debugSession.record(
             "primary=${requestedUrl.hlsDebugUrl()} sources=${requestedChrome.sources.size} " +
                 "fallbacks=${requestedChrome.fallbackPlayerPageUrls.size}",
@@ -472,11 +502,15 @@ internal class NativeDesktopPlayerPanel(
                     ?.let { player.seek(Duration.seconds(it)) }
                 hideStatus()
                 debugSession.record(
-                    "JavaFX ready duration=${player.totalDuration.safeSeconds()}s",
+                    "JavaFX ready duration=${player.totalDuration.safeSeconds()}s " +
+                        "media=${media.width}x${media.height} " +
+                        "view=${mediaView?.fitWidth?.toInt()}x${mediaView?.fitHeight?.toInt()} " +
+                        "tracks=${media.tracks.joinToString { it.javaClass.simpleName }}",
                 )
                 notifyState(EmbeddedPlayerState.Ready)
                 player.play()
                 root?.requestFocus()
+                requestSurfaceRepaint()
             }
             player.onPlaying = Runnable {
                 debugSession.record("JavaFX playing")
@@ -715,6 +749,16 @@ internal class NativeDesktopPlayerPanel(
     private fun emitAction(action: EmbeddedPlayerAction) {
         EventQueue.invokeLater {
             if (!disposed.get()) actionCallback(action)
+        }
+    }
+
+    private fun requestSurfaceRepaint() {
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            fxPanel.revalidate()
+            fxPanel.repaint()
+            revalidate()
+            repaint()
         }
     }
 }
