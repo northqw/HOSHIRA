@@ -53,7 +53,6 @@ internal class NativeDesktopPlayerPanel(
     private val debugSession = HlsDebugSession()
     private val resolver = HlsStreamResolver(debug = debugSession::record)
     private val started = AtomicBoolean(false)
-    private val sceneInstalled = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
     private val generation = AtomicLong()
 
@@ -97,6 +96,9 @@ internal class NativeDesktopPlayerPanel(
     init {
         background = AwtColor.BLACK
         add(fxPanel, BorderLayout.CENTER)
+        debugSession.record(
+            "JavaFX panel created prism=${System.getProperty("prism.order", "default")}",
+        )
         fxPanel.addMouseMotionListener(
             object : MouseMotionAdapter() {
                 override fun mouseMoved(event: java.awt.event.MouseEvent?) {
@@ -108,26 +110,16 @@ internal class NativeDesktopPlayerPanel(
                 }
             },
         )
+        Platform.runLater {
+            Platform.setImplicitExit(false)
+            installScene()
+        }
     }
 
     override fun addNotify() {
         super.addNotify()
-        // JFXPanel must have a Swing peer before its JavaFX scene is attached.
-        // Creating the scene in the constructor races Compose's SwingPanel
-        // mounting and may leave only MediaPlayer audio active.
-        EventQueue.invokeLater {
-            if (disposed.get()) return@invokeLater
-            Platform.runLater {
-                if (disposed.get()) return@runLater
-                Platform.setImplicitExit(false)
-                if (sceneInstalled.compareAndSet(false, true)) {
-                    installScene()
-                }
-                if (started.compareAndSet(false, true)) {
-                    startResolution()
-                }
-                requestSurfaceRepaint()
-            }
+        if (started.compareAndSet(false, true)) {
+            startResolution()
         }
     }
 
@@ -355,9 +347,9 @@ internal class NativeDesktopPlayerPanel(
         val currentGeneration = generation.incrementAndGet()
         debugSession.restart()
         debugSession.record(
-            "JavaFX surface displayable=${fxPanel.isDisplayable} " +
+                "JavaFX surface displayable=${fxPanel.isDisplayable} " +
                 "showing=${fxPanel.isShowing} size=${fxPanel.width}x${fxPanel.height} " +
-                "sceneInstalled=${sceneInstalled.get()} " +
+                "sceneInstalled=${fxPanel.scene != null} " +
                 "prism=${System.getProperty("prism.order", "default")}",
         )
         debugSession.record(
