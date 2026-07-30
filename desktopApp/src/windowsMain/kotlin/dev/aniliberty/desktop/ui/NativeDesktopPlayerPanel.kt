@@ -5,6 +5,8 @@ import dev.aniliberty.desktop.data.hlsDebugUrl
 import java.awt.BorderLayout
 import java.awt.Color as AwtColor
 import java.awt.EventQueue
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.MouseMotionAdapter
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -53,6 +55,8 @@ internal class NativeDesktopPlayerPanel(
     private val debugSession = HlsDebugSession()
     private val resolver = HlsStreamResolver(debug = debugSession::record)
     private val started = AtomicBoolean(false)
+    private val sceneInstallScheduled = AtomicBoolean(false)
+    private val sceneInstalled = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
     private val generation = AtomicLong()
 
@@ -99,6 +103,17 @@ internal class NativeDesktopPlayerPanel(
         debugSession.record(
             "JavaFX panel created prism=${System.getProperty("prism.order", "default")}",
         )
+        fxPanel.addComponentListener(
+            object : ComponentAdapter() {
+                override fun componentShown(event: ComponentEvent?) {
+                    scheduleSceneInstall("shown")
+                }
+
+                override fun componentResized(event: ComponentEvent?) {
+                    scheduleSceneInstall("resized")
+                }
+            },
+        )
         fxPanel.addMouseMotionListener(
             object : MouseMotionAdapter() {
                 override fun mouseMoved(event: java.awt.event.MouseEvent?) {
@@ -110,14 +125,11 @@ internal class NativeDesktopPlayerPanel(
                 }
             },
         )
-        Platform.runLater {
-            Platform.setImplicitExit(false)
-            installScene()
-        }
     }
 
     override fun addNotify() {
         super.addNotify()
+        scheduleSceneInstall("addNotify")
         if (started.compareAndSet(false, true)) {
             startResolution()
         }
@@ -221,10 +233,59 @@ internal class NativeDesktopPlayerPanel(
 
         root = sceneRoot
         mediaView = video
+        video.mediaPlayer = mediaPlayer
         fxPanel.scene = Scene(sceneRoot, Color.BLACK)
         updateChrome(requestedChrome)
-        showResolving("Получаем прямой HLS-поток…")
+        when (mediaPlayer?.status) {
+            MediaPlayer.Status.READY,
+            MediaPlayer.Status.PLAYING,
+            MediaPlayer.Status.PAUSED,
+            MediaPlayer.Status.STOPPED,
+            -> {
+                hideStatus()
+                updatePlaybackPosition()
+                playButton?.text =
+                    if (mediaPlayer?.status == MediaPlayer.Status.PLAYING) "❚❚" else "▶"
+                showControls(permanent = mediaPlayer?.status != MediaPlayer.Status.PLAYING)
+            }
+            else -> showResolving("Получаем прямой HLS-поток…")
+        }
+        debugSession.record(
+            "JavaFX scene installed size=${fxPanel.width}x${fxPanel.height} " +
+                "playerAttached=${video.mediaPlayer != null}",
+        )
         requestSurfaceRepaint()
+    }
+
+    private fun scheduleSceneInstall(reason: String) {
+        if (disposed.get() || sceneInstalled.get()) return
+        EventQueue.invokeLater {
+            if (disposed.get() || sceneInstalled.get()) return@invokeLater
+            val width = fxPanel.width
+            val height = fxPanel.height
+            if (width <= 0 || height <= 0) {
+                debugSession.record(
+                    "JavaFX scene deferred reason=$reason size=${width}x$height",
+                )
+                return@invokeLater
+            }
+            if (!sceneInstallScheduled.compareAndSet(false, true)) {
+                return@invokeLater
+            }
+            debugSession.record(
+                "JavaFX scene scheduling reason=$reason size=${width}x$height",
+            )
+            Platform.runLater {
+                try {
+                    Platform.setImplicitExit(false)
+                    if (!disposed.get() && sceneInstalled.compareAndSet(false, true)) {
+                        installScene()
+                    }
+                } finally {
+                    sceneInstallScheduled.set(false)
+                }
+            }
+        }
     }
 
     private fun createChrome(): StackPane {
@@ -349,7 +410,7 @@ internal class NativeDesktopPlayerPanel(
         debugSession.record(
                 "JavaFX surface displayable=${fxPanel.isDisplayable} " +
                 "showing=${fxPanel.isShowing} size=${fxPanel.width}x${fxPanel.height} " +
-                "sceneInstalled=${fxPanel.scene != null} " +
+                "sceneInstalled=${sceneInstalled.get()} " +
                 "prism=${System.getProperty("prism.order", "default")}",
         )
         debugSession.record(
