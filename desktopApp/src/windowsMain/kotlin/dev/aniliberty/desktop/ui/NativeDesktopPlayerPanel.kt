@@ -1,6 +1,7 @@
 package dev.aniliberty.desktop.ui
 
 import dev.aniliberty.desktop.data.HlsStreamResolver
+import dev.aniliberty.desktop.data.hlsDebugUrl
 import java.awt.BorderLayout
 import java.awt.Color as AwtColor
 import java.awt.EventQueue
@@ -48,7 +49,8 @@ internal class NativeDesktopPlayerPanel(
     private val fxPanel = JFXPanel().apply {
         background = AwtColor.BLACK
     }
-    private val resolver = HlsStreamResolver()
+    private val debugSession = HlsDebugSession()
+    private val resolver = HlsStreamResolver(debug = debugSession::record)
     private val started = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
     private val generation = AtomicLong()
@@ -327,54 +329,134 @@ internal class NativeDesktopPlayerPanel(
 
     private fun startResolution() {
         val currentGeneration = generation.incrementAndGet()
-        val url = choosePlayableUrl(requestedUrl, requestedChrome)
+        debugSession.restart()
+        debugSession.record(
+            "primary=${requestedUrl.hlsDebugUrl()} sources=${requestedChrome.sources.size} " +
+                "fallbacks=${requestedChrome.fallbackPlayerPageUrls.size}",
+        )
+        requestedChrome.sources.forEachIndexed { index, source ->
+            val diagnostic = resolver.inspect(source.playerPageUrl)
+            debugSession.record(
+                "source[$index] label=${source.label} selected=${source.selected} " +
+                    "provider=${diagnostic.provider.displayName} " +
+                    "supported=${diagnostic.supported} " +
+                    "detail=${diagnostic.detail ?: "none"} " +
+                    "url=${source.playerPageUrl?.hlsDebugUrl() ?: "<none>"}",
+            )
+        }
+        requestedChrome.fallbackPlayerPageUrls.forEachIndexed { index, fallbackUrl ->
+            val diagnostic = resolver.inspect(fallbackUrl)
+            debugSession.record(
+                "fallback[$index] provider=${diagnostic.provider.displayName} " +
+                    "supported=${diagnostic.supported} " +
+                    "detail=${diagnostic.detail ?: "none"} " +
+                    "url=${fallbackUrl.hlsDebugUrl()}",
+            )
+        }
+        val urls = candidateUrls(requestedUrl, requestedChrome)
+            .filter(resolver::supports)
+            .toList()
+        debugSession.record(
+            "playable=${urls.size} candidates=" +
+                urls.joinToString { it.hlsDebugUrl() },
+        )
         notifyState(EmbeddedPlayerState.Starting)
         Platform.runLater {
             showResolving(
-                if (url == null) {
+                if (urls.isEmpty()) {
                     "Ищем совместимый HLS-источник…"
                 } else {
-                    "Получаем прямой HLS-поток…"
+                    "Проверяем HLS-источники…"
                 },
             )
         }
-        if (url == null) {
+        if (urls.isEmpty()) {
             fail(
                 currentGeneration,
-                "Для этой серии пока нет источника с прямым HLS-потоком.",
+                unavailableSourceMessage(requestedUrl, requestedChrome),
             )
             return
         }
-        activeRequestUrl = url
 
         thread(name = "hoshira-hls-resolver", isDaemon = true) {
-            val result = runCatching { resolver.resolve(url) }
+            var lastError: Throwable? = null
+            var resolvedUrl: String? = null
+            var resolvedSourceUrl: String? = null
+            for (url in urls) {
+                val diagnostic = resolver.inspect(url)
+                debugSession.record(
+                    "attempt provider=${diagnostic.provider.displayName} " +
+                        "url=${url.hlsDebugUrl()}",
+                )
+                val result = runCatching {
+                    resolver.resolve(url, requestedChrome.preferredVoice)
+                }
+                result.onSuccess { source ->
+                    resolvedUrl = url
+                    resolvedSourceUrl = source.url
+                }.onFailure { error ->
+                    lastError = error
+                    debugSession.record(
+                        "attempt failed provider=${diagnostic.provider.displayName} " +
+                            "type=${error.javaClass.simpleName} " +
+                            "message=${error.message ?: "unknown"}",
+                    )
+                }
+                if (resolvedSourceUrl != null) break
+            }
             if (disposed.get() || generation.get() != currentGeneration) return@thread
-            result.onSuccess { source ->
+            val mediaUrl = resolvedSourceUrl
+            val requestUrl = resolvedUrl
+            if (mediaUrl != null && requestUrl != null) {
                 Platform.runLater {
                     if (!disposed.get() && generation.get() == currentGeneration) {
-                        openMedia(source.url, currentGeneration)
+                        activeRequestUrl = requestUrl
+                        updateChrome(requestedChrome)
+                        openMedia(mediaUrl, currentGeneration)
                     }
                 }
-            }.onFailure { error ->
+            } else {
+                val error = lastError
                 fail(
                     currentGeneration,
-                    error.message ?: "Не удалось подготовить HLS-поток.",
+                    error?.message ?: "Не удалось подготовить HLS-поток.",
+                    error,
                 )
             }
         }
     }
 
-    private fun choosePlayableUrl(
+    private fun candidateUrls(
         primaryUrl: String,
         chrome: EmbeddedPlayerChrome,
-    ): String? = sequenceOf(primaryUrl)
+    ): Sequence<String> = sequenceOf(primaryUrl)
         .plus(chrome.sources.asSequence().mapNotNull(EmbeddedPlayerSource::playerPageUrl))
+        .plus(chrome.fallbackPlayerPageUrls.asSequence())
         .distinct()
-        .firstOrNull(resolver::supports)
+
+    private fun unavailableSourceMessage(
+        primaryUrl: String,
+        chrome: EmbeddedPlayerChrome,
+    ): String {
+        val providers = candidateUrls(primaryUrl, chrome)
+            .map(resolver::inspect)
+            .map { it.provider.displayName }
+            .filterNot { it == "Неизвестный" || it == "Некорректная ссылка" }
+            .distinct()
+            .toList()
+        return if ("Alloha" in providers) {
+            "Найден Alloha, но его поток требует JavaScript/WebSocket и " +
+                "динамических заголовков. Подробности есть в диагностике."
+        } else if (providers.isNotEmpty()) {
+            "Найдены источники ${providers.joinToString()}, но получить прямой HLS не удалось."
+        } else {
+            "Для этой серии не найден поддерживаемый HLS-источник."
+        }
+    }
 
     private fun openMedia(hlsUrl: String, currentGeneration: Long) {
         try {
+            debugSession.record("JavaFX Media opening ${hlsUrl.hlsDebugUrl()}")
             mediaPlayer?.stop()
             mediaPlayer?.dispose()
             val media = Media(hlsUrl)
@@ -389,11 +471,15 @@ internal class NativeDesktopPlayerPanel(
                     .takeIf { it > 0.0 }
                     ?.let { player.seek(Duration.seconds(it)) }
                 hideStatus()
+                debugSession.record(
+                    "JavaFX ready duration=${player.totalDuration.safeSeconds()}s",
+                )
                 notifyState(EmbeddedPlayerState.Ready)
                 player.play()
                 root?.requestFocus()
             }
             player.onPlaying = Runnable {
+                debugSession.record("JavaFX playing")
                 playButton?.text = "❚❚"
                 scheduleControlsHide()
             }
@@ -419,12 +505,14 @@ internal class NativeDesktopPlayerPanel(
                 fail(
                     currentGeneration,
                     player.error?.message ?: "JavaFX Media не смог открыть HLS-поток.",
+                    player.error,
                 )
             }
             media.setOnError {
                 fail(
                     currentGeneration,
                     media.error?.message ?: "Источник вернул неподдерживаемый медиапоток.",
+                    media.error,
                 )
             }
             player.currentTimeProperty().addListener { _, _, _ ->
@@ -434,6 +522,7 @@ internal class NativeDesktopPlayerPanel(
             fail(
                 currentGeneration,
                 error.message ?: "Не удалось запустить HLS-поток.",
+                error,
             )
         }
     }
@@ -572,8 +661,15 @@ internal class NativeDesktopPlayerPanel(
         }
     }
 
-    private fun fail(currentGeneration: Long, message: String) {
+    private fun fail(
+        currentGeneration: Long,
+        message: String,
+        error: Throwable? = null,
+    ) {
         if (disposed.get() || generation.get() != currentGeneration) return
+        debugSession.record(
+            "FAILED type=${error?.javaClass?.simpleName ?: "none"} message=$message",
+        )
         Platform.runLater {
             if (disposed.get() || generation.get() != currentGeneration) return@runLater
             mediaPlayer?.stop()
@@ -585,7 +681,12 @@ internal class NativeDesktopPlayerPanel(
             statusLabel?.text = message
             statusLabel?.isVisible = true
             statusLabel?.isManaged = true
-            notifyState(EmbeddedPlayerState.Failed(message))
+            notifyState(
+                EmbeddedPlayerState.Failed(
+                    message = message,
+                    debugInfo = debugSession.report(),
+                ),
+            )
         }
     }
 

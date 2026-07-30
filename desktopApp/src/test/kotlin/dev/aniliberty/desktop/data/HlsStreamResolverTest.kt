@@ -1,5 +1,7 @@
 package dev.aniliberty.desktop.data
 
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -84,12 +86,106 @@ class HlsStreamResolverTest {
         }
         assertTrue(client.requests.isEmpty())
     }
+
+    @Test
+    fun `Kodik iframe resolves through its player endpoint`() {
+        val expectedUrl = "https://cdn.example/episode/720.mp4:hls:manifest.m3u8"
+        val encodedUrl = Base64.getEncoder().encodeToString(
+            expectedUrl.toByteArray(StandardCharsets.UTF_8),
+        ).map { character ->
+            when (character) {
+                in 'a'..'z' -> 'a' + ((character - 'a' + 8) % 26)
+                in 'A'..'Z' -> 'A' + ((character - 'A' + 8) % 26)
+                else -> character
+            }
+        }.joinToString("")
+        val client = RecordingHlsClient(
+            responses = mapOf(
+                "kodikplayer.com/season/" to
+                    """<script src="/assets/js/app.player_single.test.js"></script>""",
+                "/assets/js/app.player_single.test.js" to
+                    """$.ajax({type:"POST",url:atob("L2Z0b3I=")})""",
+            ),
+            postResponse =
+                """{"links":{"720":[{"src":"$encodedUrl","type":"application/x-mpegURL"}]}}""",
+        )
+        val resolver = HlsStreamResolver(client)
+
+        val source = resolver.resolve(
+            "https://kodikplayer.com/season/116621/" +
+                "abcdef0123456789abcdef0123456789/720p?episode=1",
+        )
+
+        assertEquals(expectedUrl, source.url)
+        assertEquals(1, client.postRequests.size)
+        assertEquals("season", client.postRequests.single().body["type"])
+        assertEquals("116621", client.postRequests.single().body["id"])
+        assertEquals(
+            "abcdef0123456789abcdef0123456789",
+            client.postRequests.single().body["hash"],
+        )
+    }
+
+    @Test
+    fun `Alloha is identified separately from an unknown provider`() {
+        val diagnostic = HlsStreamResolver().inspect(
+            "https://alloha.yani.tv/?token_movie=secret&token=secret",
+        )
+
+        assertEquals(HlsProvider.ALLOHA, diagnostic.provider)
+        assertTrue(!diagnostic.supported)
+        assertEquals(
+            "requires-js-websocket-and-request-headers",
+            diagnostic.detail,
+        )
+    }
+
+    @Test
+    fun `preferred voice overrides the voice from a fallback iframe`() {
+        val client = RecordingHlsClient(
+            mapOf(
+                "/player/sv/playlist" to
+                    """
+                    {
+                      "items": [
+                        {"vkId":"iframe-voice","voiceStudio":"Fallback Voice","episode":4},
+                        {"vkId":"preferred","voiceStudio":"Requested Voice","episode":4}
+                      ]
+                    }
+                    """.trimIndent(),
+                "/player/sv/video/preferred" to
+                    """{"sources":{"hlsUrl":"https://cdn.example/preferred.m3u8"}}""",
+            ),
+        )
+
+        val source = HlsStreamResolver(client).resolve(
+            "https://ru.yummyani.me/iframeCVH.html" +
+                "?anime_id=12&episode=4&dubbing=Fallback+Voice",
+            preferredVoice = "Озвучка Requested Voice",
+        )
+
+        assertEquals("https://cdn.example/preferred.m3u8", source.url)
+    }
+
+    @Test
+    fun `debug URL exposes query keys but not values`() {
+        val debugUrl = "https://media.example/master.m3u8?token=secret-value&expires=123"
+            .hlsDebugUrl()
+
+        assertEquals(
+            "https://media.example/master.m3u8?<token,expires>",
+            debugUrl,
+        )
+        assertTrue("secret-value" !in debugUrl)
+    }
 }
 
 private class RecordingHlsClient(
     private val responses: Map<String, String>,
+    private val postResponse: String? = null,
 ) : HlsHttpClient {
     val requests = mutableListOf<String>()
+    val postRequests = mutableListOf<PostRequest>()
 
     override fun get(url: String, headers: Map<String, String>): String {
         requests += url
@@ -98,4 +194,19 @@ private class RecordingHlsClient(
             ?.value
             ?: error("Unexpected request: $url")
     }
+
+    override fun postForm(
+        url: String,
+        body: Map<String, String>,
+        headers: Map<String, String>,
+    ): String {
+        postRequests += PostRequest(url, body, headers)
+        return postResponse ?: error("Unexpected POST request: $url")
+    }
 }
+
+private data class PostRequest(
+    val url: String,
+    val body: Map<String, String>,
+    val headers: Map<String, String>,
+)

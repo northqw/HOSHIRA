@@ -6,7 +6,10 @@ import java.util.Base64
 internal sealed interface EmbeddedPlayerState {
     data object Starting : EmbeddedPlayerState
     data object Ready : EmbeddedPlayerState
-    data class Failed(val message: String) : EmbeddedPlayerState
+    data class Failed(
+        val message: String,
+        val debugInfo: String? = null,
+    ) : EmbeddedPlayerState
 }
 
 internal data class EmbeddedPlayerChrome(
@@ -21,6 +24,8 @@ internal data class EmbeddedPlayerChrome(
     val preferredQuality: String? = null,
     val autoplayNext: Boolean = true,
     val controlsHideDelayMs: Int = 4_800,
+    val preferredVoice: String? = null,
+    val fallbackPlayerPageUrls: List<String> = emptyList(),
 )
 
 internal data class EmbeddedPlayerSource(

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,6 +31,8 @@ import dev.aniliberty.desktop.PlaybackSession
 import dev.aniliberty.desktop.data.PlayerPreferences
 import dev.aniliberty.desktop.model.EpisodeDto
 import java.awt.EventQueue
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.delay
 
@@ -110,6 +113,13 @@ fun PlayerScreen(
         preferredQuality = preferredQuality,
         autoplayNext = preferences.autoplayNext,
         controlsHideDelayMs = preferences.controlsHideDelayMs,
+        preferredVoice = episode.name,
+        fallbackPlayerPageUrls = release.episodes
+            .asSequence()
+            .filter { it.displayOrdinal == episode.displayOrdinal }
+            .mapNotNull(EpisodeDto::externalPlayerUrl)
+            .distinct()
+            .toList(),
     )
 
     var playerState by remember {
@@ -202,6 +212,27 @@ fun PlayerScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         textAlign = TextAlign.Center,
                     )
+                    state.debugInfo?.let { debugInfo ->
+                        Spacer(Modifier.height(18.dp))
+                        SelectionContainer {
+                            Text(
+                                text = debugInfo,
+                                color = AniColors.TextMuted.copy(alpha = 0.82f),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 14,
+                            )
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        SecondaryAction(
+                            label = "Копировать диагностику",
+                            onClick = {
+                                Toolkit.getDefaultToolkit().systemClipboard.setContents(
+                                    StringSelection(debugInfo),
+                                    null,
+                                )
+                            },
+                        )
+                    }
                     Spacer(Modifier.height(26.dp))
                     PrimaryAction(
                         label = "Назад",
