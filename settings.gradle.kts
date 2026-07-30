@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Hoshira"
 include(":desktopApp")
+include(":androidApp")

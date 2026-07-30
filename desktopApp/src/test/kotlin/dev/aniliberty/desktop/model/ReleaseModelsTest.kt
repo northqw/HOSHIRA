@@ -31,6 +31,13 @@ class ReleaseModelsTest {
     }
 
     @Test
+    fun `absolute player URL preserves query and fragment`() {
+        val url = "https://alloha.yani.tv/?token=test%2Ftoken&episode=1#player"
+
+        assertEquals(url, url.asAbsoluteYaniUrl())
+    }
+
+    @Test
     fun `landscape image prefers desktop compatible preview over AVIF`() {
         val image = ImageDto(
             src = "https://static.yani.tv/screenshots/1/full.avif",

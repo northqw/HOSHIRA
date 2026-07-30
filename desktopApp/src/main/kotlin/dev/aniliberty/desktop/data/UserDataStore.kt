@@ -4,6 +4,7 @@ import dev.aniliberty.desktop.platformDataDirectory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.charset.StandardCharsets.UTF_8
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -119,13 +120,13 @@ class UserDataStore(
 
     private fun load(): UserDataSnapshot = runCatching {
         if (!Files.exists(file)) return@runCatching UserDataSnapshot()
-        json.decodeFromString<UserDataSnapshot>(Files.readString(file))
+        json.decodeFromString<UserDataSnapshot>(String(Files.readAllBytes(file), UTF_8))
     }.getOrDefault(UserDataSnapshot())
 
     private fun save(snapshot: UserDataSnapshot) {
         Files.createDirectories(file.parent)
         val temporary = file.resolveSibling("${file.fileName}.tmp")
-        Files.writeString(temporary, json.encodeToString(snapshot))
+        Files.write(temporary, json.encodeToString(snapshot).toByteArray(UTF_8))
         runCatching {
             Files.move(
                 temporary,

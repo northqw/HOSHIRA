@@ -1,12 +1,9 @@
 package dev.aniliberty.desktop.data
 
+import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
-import java.time.Duration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -22,10 +19,6 @@ class YaniApi(
     private val applicationToken: String = System.getenv("YANI_APPLICATION_TOKEN")
         ?.takeIf { it.isNotBlank() }
         ?: DEFAULT_PUBLIC_APPLICATION_TOKEN,
-    private val client: HttpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(12))
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build(),
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -168,21 +161,17 @@ class YaniApi(
     private suspend inline fun <reified T> get(
         path: String,
         bearerToken: String? = null,
-    ): T = execute(
-        requestBuilder(path, bearerToken)
-            .GET()
-            .build(),
-    )
+    ): T = execute("GET", path, bearerToken)
 
     private suspend inline fun <reified B, reified T> post(
         path: String,
         body: B,
         bearerToken: String? = null,
     ): T = execute(
-        requestBuilder(path, bearerToken)
-            .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(body)))
-            .build(),
+        method = "POST",
+        path = path,
+        bearerToken = bearerToken,
+        body = json.encodeToString(body),
     )
 
     private suspend inline fun <reified B, reified T> put(
@@ -190,62 +179,75 @@ class YaniApi(
         body: B,
         bearerToken: String? = null,
     ): T = execute(
-        requestBuilder(path, bearerToken)
-            .header("Content-Type", "application/json")
-            .PUT(HttpRequest.BodyPublishers.ofString(json.encodeToString(body)))
-            .build(),
+        method = "PUT",
+        path = path,
+        bearerToken = bearerToken,
+        body = json.encodeToString(body),
     )
 
     private suspend inline fun <reified T> postWithoutBody(
         path: String,
         bearerToken: String? = null,
-    ): T = execute(
-        requestBuilder(path, bearerToken)
-            .POST(HttpRequest.BodyPublishers.noBody())
-            .build(),
-    )
+    ): T = execute("POST", path, bearerToken)
 
     private suspend inline fun <reified T> delete(
         path: String,
         bearerToken: String? = null,
-    ): T = execute(
-        requestBuilder(path, bearerToken)
-            .DELETE()
-            .build(),
-    )
+    ): T = execute("DELETE", path, bearerToken)
 
-    private fun requestBuilder(
+    private suspend inline fun <reified T> execute(
+        method: String,
         path: String,
         bearerToken: String?,
-    ): HttpRequest.Builder =
-        HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl$path"))
-            .timeout(Duration.ofSeconds(24))
-            .header("Accept", "application/json,image/avif,image/webp")
-            .header("Lang", "ru")
-            .header("X-Application", applicationToken)
-            .header("User-Agent", "Hoshira-Desktop/0.2")
-            .apply {
-                bearerToken
-                    ?.takeIf(String::isNotBlank)
-                    ?.let { header("Authorization", "Bearer $it") }
+        body: String? = null,
+    ): T = withContext(Dispatchers.IO) {
+        val connection = (URI("$baseUrl$path").toURL().openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+            instanceFollowRedirects = true
+            setRequestProperty("Accept", "application/json,image/avif,image/webp")
+            setRequestProperty("Lang", "ru")
+            setRequestProperty("X-Application", applicationToken)
+            setRequestProperty("User-Agent", "Hoshira/0.3")
+            bearerToken
+                ?.takeIf(String::isNotBlank)
+                ?.let { setRequestProperty("Authorization", "Bearer $it") }
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
-
-    private suspend inline fun <reified T> execute(request: HttpRequest): T =
-        withContext(Dispatchers.IO) {
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() !in 200..299) {
-            throw YaniApiException(
-                statusCode = response.statusCode(),
-                message = response.body()
-                    .take(400)
-                    .takeIf(String::isNotBlank)
-                    ?: "Yani API вернул код ${response.statusCode()}",
-            )
         }
-        json.decodeFromString<T>(response.body())
+        try {
+            if (body != null) {
+                connection.outputStream.use { output ->
+                    output.write(body.toByteArray(StandardCharsets.UTF_8))
+                }
+            }
+            val statusCode = connection.responseCode
+            val responseBody = (if (statusCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            })?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (statusCode !in 200..299) {
+                throw YaniApiException(
+                    statusCode = statusCode,
+                    message = responseBody
+                        .take(400)
+                        .takeIf(String::isNotBlank)
+                        ?: "Yani API вернул код $statusCode",
+                )
+            }
+            json.decodeFromString<T>(responseBody)
+        } finally {
+            connection.disconnect()
+        }
     }
 }
+
+private const val CONNECT_TIMEOUT_MS = 12_000
+private const val READ_TIMEOUT_MS = 24_000
 
 internal fun catalogPath(
     limit: Int,

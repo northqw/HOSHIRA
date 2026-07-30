@@ -14,6 +14,7 @@
     <img src="https://img.shields.io/badge/version-0.3.0-ff4e00?style=flat-square" alt="Version 0.3.0">
     <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
     <img src="https://img.shields.io/badge/Linux-experimental-111318?style=flat-square&logo=linux" alt="Linux experimental">
+    <img src="https://img.shields.io/badge/Android%20beta-in%20development-3ddc84?style=flat-square&logo=android&logoColor=white" alt="Android beta in development">
     <img src="https://img.shields.io/badge/Kotlin-2.3.20-7f52ff?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin 2.3.20">
     <img src="https://img.shields.io/badge/Compose%20Desktop-1.11.1-4285f4?style=flat-square" alt="Compose Desktop 1.11.1">
     <img src="https://img.shields.io/badge/license-proprietary-111318?style=flat-square" alt="Proprietary license">
@@ -34,6 +35,10 @@ native Windows integration, and a branded installer.
 The primary release is a **Windows x64 desktop beta**. Linux x64 is available
 as an experimental build: UI, catalog, and account logic are shared, while the
 window, session storage, and embedded browser have platform implementations.
+
+> **The Hoshira mobile beta is under active development.**
+> Its Android source code lives in the `androidApp` module.
+> Interfaces, capabilities, and build formats may change before release.
 
 ## Features
 
@@ -81,6 +86,7 @@ Ubuntu 22.04 provides `libwebkit2gtk-4.0-37` instead of
 ## Repository layout
 
 ```text
+androidApp/                 # Hoshira mobile beta for Android
 desktopApp/
 ├─ installer/             # branded installer shell
 ├─ src/main/kotlin/       # application, API, state, and UI

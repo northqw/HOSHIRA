@@ -335,6 +335,7 @@ fun DubbingDropdown(
     modifier: Modifier = Modifier,
     placeholder: String = "Выберите студию",
     countSuffix: String = "сер.",
+    width: androidx.compose.ui.unit.Dp = 420.dp,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var hovered by remember { mutableStateOf(false) }
@@ -351,7 +352,7 @@ fun DubbingDropdown(
     val selectedOption = options.firstOrNull { it.first == selected }
 
     Box(
-        modifier = modifier.width(420.dp),
+        modifier = modifier.width(width),
     ) {
         Row(
             modifier = Modifier
@@ -399,7 +400,7 @@ fun DubbingDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier
-                .width(420.dp)
+                .width(width)
                 .clip(RoundedCornerShape(20.dp))
                 .border(
                     width = 1.dp,
@@ -747,7 +748,7 @@ private fun CatalogDropdown(
 }
 
 @Composable
-private fun DropdownChevron(
+internal fun DropdownChevron(
     expanded: Boolean,
     color: Color,
     modifier: Modifier = Modifier,
