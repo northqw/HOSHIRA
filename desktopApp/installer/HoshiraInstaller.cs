@@ -36,8 +36,6 @@ namespace Hoshira.Setup
         private const string InstallerVersion = "0.3.0";
         private const string PayloadResourceName = "Hoshira.Payload.msi";
         private const string SetupIconResourceName = "Hoshira.SetupIcon";
-        private const string WebView2BootstrapperResourceName =
-            "Hoshira.WebView2Bootstrapper.exe";
 
         private static readonly Color Surface = Color.FromArgb(8, 9, 11);
         private static readonly Color Elevated = Color.FromArgb(18, 19, 23);
@@ -306,12 +304,11 @@ namespace Hoshira.Setup
 
         private void UpdatePrerequisiteStatus()
         {
-            string webView2Version = WebView2Runtime.FindVersion();
             detailLabel.Top = 395;
             detailLabel.Height = 42;
-            detailLabel.Text = String.IsNullOrEmpty(webView2Version)
-                ? "WebView2 Runtime не найден — установим официальный компонент Microsoft."
-                : "Системные компоненты готовы. Ярлыки появятся на рабочем столе и в меню «Пуск».";
+            detailLabel.Text =
+                "Все компоненты HLS-плеера входят в приложение. Ярлыки появятся " +
+                "на рабочем столе и в меню «Пуск».";
         }
 
         private void LoadApplicationIcon()
@@ -495,35 +492,6 @@ namespace Hoshira.Setup
             try
             {
                 worker.ReportProgress(0, "Проверяем системные компоненты…");
-                if (!WebView2Runtime.IsInstalled())
-                {
-                    string webView2BootstrapperPath = Path.Combine(
-                        workingDirectory,
-                        "MicrosoftEdgeWebview2Setup.exe");
-                    worker.ReportProgress(
-                        0,
-                        "Подготавливаем Microsoft Edge WebView2 Runtime…");
-                    ExtractResource(
-                        WebView2BootstrapperResourceName,
-                        webView2BootstrapperPath,
-                        "В установщике отсутствует компонент WebView2 Runtime.");
-
-                    worker.ReportProgress(
-                        0,
-                        "Устанавливаем Microsoft Edge WebView2 Runtime…");
-                    int webView2ExitCode = RunElevatedExecutable(
-                        webView2BootstrapperPath,
-                        "/silent /install");
-                    if (!WebView2Runtime.IsInstalled())
-                    {
-                        TryDeleteDirectory(workingDirectory);
-                        return InstallResult.Failed(
-                            webView2ExitCode,
-                            null,
-                            DescribeWebView2Error(webView2ExitCode));
-                    }
-                }
-
                 worker.ReportProgress(0, "Распаковываем Hoshira…");
                 ExtractPayload(msiPath);
 
@@ -817,22 +785,6 @@ namespace Hoshira.Setup
             }
         }
 
-        private static string DescribeWebView2Error(int exitCode)
-        {
-            switch (exitCode)
-            {
-                case 1602:
-                case 1223:
-                    return "Установка Microsoft Edge WebView2 Runtime была отменена.";
-                case 3010:
-                    return "WebView2 Runtime установлен, но Windows требуется перезагрузка.";
-                default:
-                    return "Не удалось установить Microsoft Edge WebView2 Runtime. " +
-                        "Проверьте подключение к интернету и повторите попытку. " +
-                        "Код установщика: " + exitCode + ".";
-            }
-        }
-
         private static string Quote(string value)
         {
             return "\"" + value.Replace("\"", "\\\"") + "\"";
@@ -896,65 +848,6 @@ namespace Hoshira.Setup
             int message,
             IntPtr parameter,
             IntPtr lParam);
-    }
-
-    internal static class WebView2Runtime
-    {
-        private const string ClientKeyPath =
-            @"Software\Microsoft\EdgeUpdate\Clients\" +
-            "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
-
-        internal static bool IsInstalled()
-        {
-            return !String.IsNullOrEmpty(FindVersion());
-        }
-
-        internal static string FindVersion()
-        {
-            RegistryHive[] hives = new RegistryHive[]
-            {
-                RegistryHive.LocalMachine,
-                RegistryHive.CurrentUser
-            };
-            RegistryView[] views = new RegistryView[]
-            {
-                RegistryView.Registry64,
-                RegistryView.Registry32
-            };
-
-            foreach (RegistryHive hive in hives)
-            {
-                foreach (RegistryView view in views)
-                {
-                    try
-                    {
-                        using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, view))
-                        using (RegistryKey clientKey = baseKey.OpenSubKey(ClientKeyPath))
-                        {
-                            if (clientKey == null)
-                            {
-                                continue;
-                            }
-
-                            string versionText = clientKey.GetValue("pv") as string;
-                            Version version;
-                            if (!String.IsNullOrWhiteSpace(versionText) &&
-                                Version.TryParse(versionText, out version) &&
-                                version.CompareTo(new Version(0, 0, 0, 0)) > 0)
-                            {
-                                return version.ToString();
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Continue with the next registry location.
-                    }
-                }
-            }
-
-            return null;
-        }
     }
 
     internal sealed class InstalledProduct

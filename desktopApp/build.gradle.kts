@@ -30,7 +30,6 @@ kotlin {
                 kotlin.srcDir("src/linuxMain/kotlin")
                 kotlin.exclude(
                     "dev/aniliberty/desktop/WindowsWindowStyle.kt",
-                    "dev/aniliberty/desktop/ui/NativeWebView2PlayerPanel.kt",
                 )
             }
             else -> error("Desktop target '$targetOs' is not configured yet")
@@ -49,6 +48,11 @@ dependencies {
     if (targetOs == "windows") {
         implementation("net.java.dev.jna:jna:5.6.0")
         implementation("net.java.dev.jna:jna-platform:5.6.0")
+        implementation("org.openjfx:javafx-base:21.0.12:win")
+        implementation("org.openjfx:javafx-controls:21.0.12:win")
+        implementation("org.openjfx:javafx-graphics:21.0.12:win")
+        implementation("org.openjfx:javafx-media:21.0.12:win")
+        implementation("org.openjfx:javafx-swing:21.0.12:win")
     }
     if (targetOs == "linux") {
         implementation("org.eclipse.platform:org.eclipse.swt.gtk.linux.x86_64:3.128.0") {
@@ -88,7 +92,6 @@ compose.desktop {
                 "jdk.crypto.ec",
                 "jdk.unsupported",
             )
-
             if (targetOs == "windows") {
                 windows {
                     iconFile.set(project.file("src/main/resources/icons/hoshira.ico"))

@@ -27,7 +27,7 @@ import kotlinx.coroutines.delay
 fun main() {
     // AWT otherwise clears a newly attached heavyweight Canvas with the
     // platform window color before its first paint. On Windows that produces
-    // a single white frame between the Compose loader and WebView2.
+    // a single white frame between the Compose loader and native media surface.
     System.setProperty("sun.awt.noerasebackground", "true")
     System.setProperty("sun.awt.erasebackgroundonresize", "false")
 

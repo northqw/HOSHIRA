@@ -102,6 +102,7 @@ fun PlayerScreen(
                 episodeId = source.id,
                 label = source.displayPlayerName,
                 selected = source.id == episode.id,
+                playerPageUrl = source.externalPlayerUrl,
             )
         },
         resumeSeconds = session.resumeSeconds,
@@ -118,7 +119,7 @@ fun PlayerScreen(
         mutableStateOf(false)
     }
     val playerPanel = remember {
-        AtomicReference<NativeWebView2PlayerPanel?>()
+        AtomicReference<NativeDesktopPlayerPanel?>()
     }
     val currentFullscreen by rememberUpdatedState(isFullscreen)
     val currentFullscreenCallback by rememberUpdatedState(onFullscreenChange)
@@ -126,9 +127,8 @@ fun PlayerScreen(
         when (action) {
             EmbeddedPlayerAction.Back -> {
                 if (currentFullscreen) {
-                    // Restore the top-level window first. Native fullscreen
-                    // changes and heavyweight WebView2 disposal both trigger
-                    // AWT resize/redraw work and must not share one event.
+                    // Restore the top-level window before leaving the route so
+                    // AWT does not resize and dispose the media panel at once.
                     currentFullscreenCallback(false)
                     EventQueue.invokeLater(onBack)
                 } else {
@@ -190,7 +190,7 @@ fun PlayerScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        text = "Не удалось открыть встроенный плеер",
+                        text = "Не удалось открыть HLS-плеер",
                         color = AniColors.Text,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.ExtraBold,
@@ -215,7 +215,7 @@ fun PlayerScreen(
                 if (mountNativePlayer) {
                     SwingPanel(
                         factory = {
-                            NativeWebView2PlayerPanel(
+                            NativeDesktopPlayerPanel(
                                 initialUrl = playerPageUrl,
                                 initialChrome = chrome,
                                 onStateChange = { playerState = it },
@@ -235,7 +235,7 @@ fun PlayerScreen(
                     )
                 } else {
                     LoadingState(
-                        label = "Загружаем плеер…",
+                        label = "Подготавливаем HLS-поток…",
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

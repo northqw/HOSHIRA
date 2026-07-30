@@ -27,6 +27,7 @@ internal data class EmbeddedPlayerSource(
     val episodeId: String,
     val label: String,
     val selected: Boolean,
+    val playerPageUrl: String? = null,
 )
 
 internal sealed interface EmbeddedPlayerAction {

@@ -18,7 +18,7 @@ AppController ───────────────► AccountRepository
 ReleaseRepository ────────────────► YaniApi
    │
    ▼
-Platform player host ─────────────► external player pages
+Platform player host ─────────────► HLS stream / external player pages
 ```
 
 ## Основные слои
@@ -34,6 +34,7 @@ Compose.
 - `ReleaseRepository` — главная лента, каталог, поиск и страницы релизов;
 - `AccountRepository` — авторизация, пользовательские списки и DPAPI-хранилище
   сессии;
+- `HlsStreamResolver` — преобразование VideoHub iframe в прямой HLS-поток;
 - `PlayerEngine` — платформенно-независимый контракт источника воспроизведения.
 
 ### `ui`
@@ -44,9 +45,9 @@ Compose-экраны, компоненты, тема, навигация и со
 ### Windows integration
 
 - `WindowsWindowStyle` управляет тёмной рамкой нативного окна;
-- `NativeWebView2PlayerPanel` размещает WebView2 через Win32/JNA;
-- `EmbeddedPlayerHost` генерирует изолированную HTML-оболочку и собственные
-  элементы управления плеером;
+- `NativeDesktopPlayerPanel` воспроизводит HLS через JavaFX Media внутри Swing;
+- JavaFX-слой содержит собственные элементы управления, восстановление позиции
+  и автоматический переход к следующей серии;
 - C#-оболочка установщика упаковывает MSI, созданный jpackage/WiX.
 
 ### Linux integration
@@ -66,7 +67,7 @@ Compose-экраны, компоненты, тема, навигация и со
 - приватный API-токен не поставляется с приложением;
 - пароль существует только во время запроса авторизации;
 - access token шифруется Windows DPAPI или платформенным Linux-хранилищем;
-- браузерные данные WebView2 хранятся в локальном профиле Hoshira.
+- Windows-плеер не создаёт браузерный профиль и не исполняет страницы провайдера.
 
 ## Направление развития
 
@@ -84,4 +85,4 @@ apps/
   android-tv
 ```
 
-Windows WebView2-host и установщик при этом останутся внутри desktop-модуля.
+Windows HLS-плеер и установщик при этом останутся внутри desktop-модуля.

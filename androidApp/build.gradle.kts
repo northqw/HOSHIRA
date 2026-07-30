@@ -17,7 +17,6 @@ val desktopOnlySources = listOf(
     "dev/aniliberty/desktop/ui/Theme.kt",
     "dev/aniliberty/desktop/ui/PlayerScreen.kt",
     "dev/aniliberty/desktop/ui/EmbeddedPlayerHost.kt",
-    "dev/aniliberty/desktop/ui/NativeWebView2PlayerPanel.kt",
 ).map { sharedDesktopSourceRoot.resolve(it).normalize() }.toSet()
 
 android {

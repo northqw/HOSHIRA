@@ -27,12 +27,12 @@ import org.eclipse.swt.widgets.Shell
 /**
  * Linux browser host backed by the system WebKitGTK/GStreamer stack.
  *
- * The public class name intentionally matches the Windows implementation so
+ * The platform class name intentionally matches the Windows implementation so
  * the Compose player screen stays platform-neutral. One panel, browser and
  * WebKit process are kept alive while the player route is open; switching an
  * episode only navigates that existing browser.
  */
-internal class NativeWebView2PlayerPanel(
+internal class NativeDesktopPlayerPanel(
     initialUrl: String,
     initialChrome: EmbeddedPlayerChrome,
     onStateChange: (EmbeddedPlayerState) -> Unit,
