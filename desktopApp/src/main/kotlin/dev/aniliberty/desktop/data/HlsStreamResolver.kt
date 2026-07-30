@@ -145,6 +145,10 @@ internal class HlsStreamResolver(
             "User-Agent" to BROWSER_USER_AGENT,
         )
         val page = requestText(pageUrl, browserHeaders, "Kodik player page")
+        val secureData = parseKodikSecureData(page, reference.id)
+        debug(
+            "Kodik secure data parsed refPresent=${secureData.ref.isNotBlank()}",
+        )
         val playerPath = KODIK_PLAYER_SCRIPT_REGEX.find(page)
             ?.groupValues
             ?.getOrNull(1)
@@ -171,17 +175,23 @@ internal class HlsStreamResolver(
             url = reference.origin.resolve(endpoint).toASCIIString(),
             providerName = "Kodik",
             body = mapOf(
+                "d" to secureData.d,
+                "d_sign" to secureData.dSign,
+                "pd" to secureData.pd,
+                "pd_sign" to secureData.pdSign,
+                "ref" to secureData.ref.urlDecodeOrSelf(),
+                "ref_sign" to secureData.refSign,
                 "type" to reference.type,
                 "hash" to reference.hash,
                 "id" to reference.id,
-                "bad_user" to "True",
+                "bad_user" to "false",
                 "info" to "{}",
-                "cdn_is_working" to "True",
+                "cdn_is_working" to "true",
             ),
             headers = mapOf(
                 "Accept" to "application/json, text/javascript, */*; q=0.01",
                 "Origin" to reference.origin.toASCIIString().trimEnd('/'),
-                "Referer" to pageUrl,
+                "Referer" to reference.playerReferer(),
                 "User-Agent" to BROWSER_USER_AGENT,
                 "X-Requested-With" to "XMLHttpRequest",
             ),
@@ -196,6 +206,39 @@ internal class HlsStreamResolver(
             ?: throw HlsResolutionException("Не удалось декодировать HLS-поток Kodik.")
         debug("Kodik hls resolved ${hlsUrl.hlsDebugUrl()}")
         return PlaybackSource.DirectMedia(hlsUrl)
+    }
+
+    private fun parseKodikSecureData(
+        page: String,
+        videoId: String,
+    ): KodikSecureData {
+        val marker = Regex(
+            """(?:videoId\s*=\s*["']${Regex.escape(videoId)}["']|""" +
+                """serialId\s*=\s*Number\(\s*${Regex.escape(videoId)}\s*\))""",
+        )
+        val secureScript = KODIK_INLINE_SCRIPT_REGEX
+            .findAll(page)
+            .map { it.groupValues[1] }
+            .firstOrNull(marker::containsMatchIn)
+            ?: throw HlsResolutionException(
+                "Kodik не вернул подписанные параметры текущего видео.",
+            )
+        val secureJson = KODIK_SECURE_JSON_REGEX.find(secureScript)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: throw HlsResolutionException(
+                "Kodik изменил формат подписанных параметров.",
+            )
+        return try {
+            json.decodeFromString<KodikSecureData>(secureJson)
+        } catch (error: Exception) {
+            throw HlsResolutionException(
+                "Kodik вернул некорректные подписанные параметры.",
+                error,
+            )
+        }
     }
 
     private inline fun <reified T> request(url: String): T {
@@ -370,6 +413,19 @@ private data class KodikReference(
 )
 
 @Serializable
+private data class KodikSecureData(
+    val d: String,
+    @SerialName("d_sign")
+    val dSign: String,
+    val pd: String,
+    @SerialName("pd_sign")
+    val pdSign: String,
+    val ref: String,
+    @SerialName("ref_sign")
+    val refSign: String,
+)
+
+@Serializable
 private data class VideoHubPlaylist(
     val items: List<VideoHubPlaylistItem> = emptyList(),
 )
@@ -468,6 +524,9 @@ private fun URI.toKodikReference(): KodikReference? {
     )
 }
 
+private fun KodikReference.playerReferer(): String =
+    origin.resolve("/$type/$id/$hash/360p").toASCIIString()
+
 private fun URI.isAllohaPlayer(): Boolean {
     val normalizedHost = host?.lowercase(Locale.ROOT) ?: return false
     return normalizedHost == ALLOHA_HOST || normalizedHost.endsWith(".$ALLOHA_HOST")
@@ -487,6 +546,17 @@ private fun unsupportedProvider(uri: URI): HlsResolutionException {
 }
 
 private fun decodeKodikLink(encoded: String): String? {
+    val direct = encoded.trim().let {
+        when {
+            it.startsWith("//") -> "https:$it"
+            it.startsWith("https://", ignoreCase = true) -> it
+            it.startsWith("http://", ignoreCase = true) -> it
+            else -> null
+        }
+    }
+    if (direct != null) {
+        return direct.toHttpUri()?.toASCIIString()
+    }
     for (shift in 0..26) {
         val shifted = buildString(encoded.length) {
             encoded.forEach { character ->
@@ -586,6 +656,9 @@ internal fun String.hlsDebugUrl(): String {
 private fun String.urlDecodeSafely(): String =
     runCatching(::urlDecode).getOrDefault("<invalid>")
 
+private fun String.urlDecodeOrSelf(): String =
+    runCatching(::urlDecode).getOrDefault(this)
+
 private const val VIDEO_HUB_API = "https://plapi.cdnvideohub.com/api/v1"
 private const val VIDEO_HUB_PUBLISHER = 745
 private const val VIDEO_HUB_AGGREGATOR = "mali"
@@ -597,6 +670,14 @@ private val KODIK_HASH_REGEX = Regex("""[a-z0-9]{16,128}""")
 private val KODIK_PLAYER_SCRIPT_REGEX = Regex(
     """<script[^>]+src=["'](/assets/js/app\.player_single[^"']+)["']""",
     RegexOption.IGNORE_CASE,
+)
+private val KODIK_INLINE_SCRIPT_REGEX = Regex(
+    """<script\b[^>]*>([\s\S]*?)</script>""",
+    RegexOption.IGNORE_CASE,
+)
+private val KODIK_SECURE_JSON_REGEX = Regex(
+    """'\s*(\{[^']+})\s*'""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
 )
 private val KODIK_ENDPOINT_REGEX = Regex(
     """url:\s*atob\(["']([A-Za-z0-9+/=]+)["']\)""",

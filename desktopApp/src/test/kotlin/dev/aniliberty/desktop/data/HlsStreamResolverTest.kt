@@ -102,7 +102,13 @@ class HlsStreamResolverTest {
         val client = RecordingHlsClient(
             responses = mapOf(
                 "kodikplayer.com/season/" to
-                    """<script src="/assets/js/app.player_single.test.js"></script>""",
+                    """
+                    <script>
+                      const videoId = "116621";
+                      const secure = '{"d":"kodikplayer.com","d_sign":"d-sign","pd":"kodikplayer.com","pd_sign":"pd-sign","ref":"%2Fwatch%3Fepisode%3D1","ref_sign":"ref-sign"}';
+                    </script>
+                    <script src="/assets/js/app.player_single.test.js"></script>
+                    """.trimIndent(),
                 "/assets/js/app.player_single.test.js" to
                     """$.ajax({type:"POST",url:atob("L2Z0b3I=")})""",
             ),
@@ -123,6 +129,17 @@ class HlsStreamResolverTest {
         assertEquals(
             "abcdef0123456789abcdef0123456789",
             client.postRequests.single().body["hash"],
+        )
+        assertEquals("d-sign", client.postRequests.single().body["d_sign"])
+        assertEquals("pd-sign", client.postRequests.single().body["pd_sign"])
+        assertEquals("ref-sign", client.postRequests.single().body["ref_sign"])
+        assertEquals("/watch?episode=1", client.postRequests.single().body["ref"])
+        assertEquals("false", client.postRequests.single().body["bad_user"])
+        assertEquals("true", client.postRequests.single().body["cdn_is_working"])
+        assertEquals(
+            "https://kodikplayer.com/season/116621/" +
+                "abcdef0123456789abcdef0123456789/360p",
+            client.postRequests.single().headers["Referer"],
         )
     }
 
