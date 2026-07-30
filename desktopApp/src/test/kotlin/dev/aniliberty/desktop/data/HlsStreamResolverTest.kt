@@ -111,13 +111,46 @@ class HlsStreamResolverTest {
                     """.trimIndent(),
                 "/assets/js/app.player_single.test.js" to
                     """$.ajax({type:"POST",url:atob("L2Z0b3I=")})""",
+                "/ftor?" to
+                    """{"links":{"720":[{"src":"$encodedUrl","type":"application/x-mpegURL"}]}}""",
             ),
-            postResponse =
-                """{"links":{"720":[{"src":"$encodedUrl","type":"application/x-mpegURL"}]}}""",
         )
         val resolver = HlsStreamResolver(client)
 
         val source = resolver.resolve(
+            "https://kodikplayer.com/season/116621/" +
+                "abcdef0123456789abcdef0123456789/720p?episode=1",
+        )
+
+        assertEquals(expectedUrl, source.url)
+        assertTrue(client.postRequests.isEmpty())
+        val endpointRequest = client.requests.single { "/ftor?" in it }
+        assertTrue("type=season" in endpointRequest)
+        assertTrue("id=116621" in endpointRequest)
+        assertTrue("hash=abcdef0123456789abcdef0123456789" in endpointRequest)
+    }
+
+    @Test
+    fun `Kodik falls back to signed POST and preserves plus in ref`() {
+        val expectedUrl = "https://cdn.example/episode/720.mp4:hls:manifest.m3u8"
+        val client = RecordingHlsClient(
+            responses = mapOf(
+                "kodikplayer.com/season/" to
+                    """
+                    <script>
+                      const serialId = Number(999999);
+                      const secure = '{"d":"kodikplayer.com","d_sign":"d-sign","pd":"kodikplayer.com","pd_sign":"pd-sign","ref":"%2Fwatch%3Ftoken%3Da+b","ref_sign":"ref-sign"}';
+                    </script>
+                    <script src="/assets/js/app.player_single.test.js"></script>
+                    """.trimIndent(),
+                "/assets/js/app.player_single.test.js" to
+                    """$.ajax({type:"POST",url:atob("L2Z0b3I=")})""",
+            ),
+            postResponse =
+                """{"links":{"720":[{"src":"$expectedUrl","type":"application/x-mpegURL"}]}}""",
+        )
+
+        val source = HlsStreamResolver(client).resolve(
             "https://kodikplayer.com/season/116621/" +
                 "abcdef0123456789abcdef0123456789/720p?episode=1",
         )
@@ -133,7 +166,7 @@ class HlsStreamResolverTest {
         assertEquals("d-sign", client.postRequests.single().body["d_sign"])
         assertEquals("pd-sign", client.postRequests.single().body["pd_sign"])
         assertEquals("ref-sign", client.postRequests.single().body["ref_sign"])
-        assertEquals("/watch?episode=1", client.postRequests.single().body["ref"])
+        assertEquals("/watch?token=a+b", client.postRequests.single().body["ref"])
         assertEquals("false", client.postRequests.single().body["bad_user"])
         assertEquals("true", client.postRequests.single().body["cdn_is_working"])
         assertEquals(

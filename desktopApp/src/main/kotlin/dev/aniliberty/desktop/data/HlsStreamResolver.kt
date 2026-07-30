@@ -173,31 +173,53 @@ internal class HlsStreamResolver(
             ?.takeIf { it.startsWith('/') && !it.startsWith("//") }
             ?: throw HlsResolutionException("Kodik вернул некорректный служебный адрес.")
         debug("Kodik endpoint=$endpoint")
-        val response = requestJson<KodikPlayerResponse>(
-            url = reference.origin.resolve(endpoint).toASCIIString(),
-            providerName = "Kodik",
-            body = mapOf(
-                "d" to secureData.d,
-                "d_sign" to secureData.dSign,
-                "pd" to secureData.pd,
-                "pd_sign" to secureData.pdSign,
-                "ref" to secureData.ref.urlDecodeOrSelf(),
-                "ref_sign" to secureData.refSign,
-                "type" to reference.type,
-                "hash" to reference.hash,
-                "id" to reference.id,
-                "bad_user" to "false",
-                "info" to "{}",
-                "cdn_is_working" to "true",
-            ),
-            headers = mapOf(
-                "Accept" to "application/json, text/javascript, */*; q=0.01",
-                "Origin" to reference.origin.toASCIIString().trimEnd('/'),
-                "Referer" to pageUrl,
-                "User-Agent" to BROWSER_USER_AGENT,
-                "X-Requested-With" to "XMLHttpRequest",
-            ),
+        val endpointUrl = reference.origin.resolve(endpoint).toASCIIString()
+        val playerHeaders = mapOf(
+            "Accept" to "application/json, text/javascript, */*; q=0.01",
+            "Origin" to reference.origin.toASCIIString().trimEnd('/'),
+            "Referer" to pageUrl,
+            "User-Agent" to BROWSER_USER_AGENT,
+            "X-Requested-With" to "XMLHttpRequest",
         )
+        val currentRequestUrl = buildString {
+            append(endpointUrl)
+            append(if ('?' in endpointUrl) '&' else '?')
+            append("type=${reference.type.urlEncode()}")
+            append("&id=${reference.id.urlEncode()}")
+            append("&hash=${reference.hash.urlEncode()}")
+        }
+        debug("Kodik request mode=GET queryKeys=type,id,hash")
+        val response = try {
+            requestJson<KodikPlayerResponse>(
+                url = currentRequestUrl,
+                providerName = "Kodik",
+                headers = playerHeaders,
+            )
+        } catch (currentError: HlsResolutionException) {
+            debug(
+                "Kodik GET failed type=${currentError::class.simpleName} " +
+                    "message=${currentError.message}; trying legacy POST",
+            )
+            requestJson<KodikPlayerResponse>(
+                url = endpointUrl,
+                providerName = "Kodik",
+                body = mapOf(
+                    "d" to secureData.d,
+                    "d_sign" to secureData.dSign,
+                    "pd" to secureData.pd,
+                    "pd_sign" to secureData.pdSign,
+                    "ref" to secureData.ref.decodeURIComponentOrSelf(),
+                    "ref_sign" to secureData.refSign,
+                    "type" to reference.type,
+                    "hash" to reference.hash,
+                    "id" to reference.id,
+                    "bad_user" to "false",
+                    "info" to "{}",
+                    "cdn_is_working" to "true",
+                ),
+                headers = playerHeaders,
+            )
+        }
         val encodedLink = KODIK_QUALITY_ORDER
             .asSequence()
             .flatMap { quality -> response.links[quality].orEmpty().asSequence() }
@@ -389,8 +411,13 @@ private object UrlConnectionHlsHttpClient : HlsHttpClient {
                 connection.errorStream
             })?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (statusCode !in 200..299) {
+                val responseType = connection.contentType
+                    ?.substringBefore(';')
+                    ?.takeIf(String::isNotBlank)
+                    ?: "unknown"
                 throw HlsResolutionException(
-                    "${URI(url).host ?: "Источник"} вернул HTTP $statusCode.",
+                    "${URI(url).host ?: "Источник"} вернул HTTP $statusCode " +
+                        "($method, type=$responseType, bytes=${response.length}).",
                 )
             }
             return response
@@ -675,8 +702,13 @@ internal fun String.hlsDebugUrl(): String {
 private fun String.urlDecodeSafely(): String =
     runCatching(::urlDecode).getOrDefault("<invalid>")
 
-private fun String.urlDecodeOrSelf(): String =
-    runCatching(::urlDecode).getOrDefault(this)
+private fun String.decodeURIComponentOrSelf(): String =
+    runCatching {
+        URLDecoder.decode(
+            replace("+", "%2B"),
+            StandardCharsets.UTF_8,
+        )
+    }.getOrDefault(this)
 
 private const val VIDEO_HUB_API = "https://plapi.cdnvideohub.com/api/v1"
 private const val VIDEO_HUB_PUBLISHER = 745
