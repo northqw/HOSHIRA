@@ -58,6 +58,7 @@ internal class HlsStreamResolver(
     fun resolve(
         url: String,
         preferredVoice: String? = null,
+        preferredQuality: String? = null,
     ): PlaybackSource.DirectMedia {
         debug("resolver input ${url.hlsDebugUrl()}")
         val uri = url.toHttpUri()
@@ -68,7 +69,7 @@ internal class HlsStreamResolver(
         }
 
         uri.toKodikReference()?.let { reference ->
-            return resolveKodik(reference)
+            return resolveKodik(reference, preferredQuality)
         }
 
         val reference = uri.toVideoHubReference()
@@ -135,7 +136,10 @@ internal class HlsStreamResolver(
         return PlaybackSource.DirectMedia(hlsUrl)
     }
 
-    private fun resolveKodik(reference: KodikReference): PlaybackSource.DirectMedia {
+    private fun resolveKodik(
+        reference: KodikReference,
+        preferredQuality: String?,
+    ): PlaybackSource.DirectMedia {
         debug(
             "Kodik iframe parsed host=${reference.origin.host} " +
                 "type=${reference.type} id=${reference.id}",
@@ -233,16 +237,41 @@ internal class HlsStreamResolver(
                 headers = playerHeaders,
             )
         }
-        val encodedLink = KODIK_QUALITY_ORDER
+        val availableQualityKeys = response.links
+            .filterValues { links -> links.any { it.src.isNotBlank() } }
+            .keys
+            .sortedWith(
+                compareByDescending<String> { it.toIntOrNull() ?: Int.MIN_VALUE }
+                    .thenByDescending { it },
+            )
+        val preferredQualityKey = preferredQuality.normalizedQualityKey()
+        val qualityOrder = listOfNotNull(preferredQualityKey)
+            .plus(KODIK_QUALITY_ORDER)
+            .plus(availableQualityKeys)
+            .distinct()
+        val selectedQualityKey = qualityOrder.firstOrNull { quality ->
+            response.links[quality].orEmpty().any { it.src.isNotBlank() }
+        }
+            ?: throw HlsResolutionException("Kodik не вернул доступный HLS-поток.")
+        val encodedLink = response.links[selectedQualityKey]
+            .orEmpty()
             .asSequence()
-            .flatMap { quality -> response.links[quality].orEmpty().asSequence() }
             .map(KodikLink::src)
             .firstOrNull(String::isNotBlank)
             ?: throw HlsResolutionException("Kodik не вернул доступный HLS-поток.")
         val hlsUrl = decodeKodikLink(encodedLink)
             ?: throw HlsResolutionException("Не удалось декодировать HLS-поток Kodik.")
-        debug("Kodik hls resolved ${hlsUrl.hlsDebugUrl()}")
-        return PlaybackSource.DirectMedia(hlsUrl)
+        val selectedQuality = selectedQualityKey.qualityLabel()
+        val availableQualities = availableQualityKeys.map(String::qualityLabel)
+        debug(
+            "Kodik hls resolved quality=$selectedQuality " +
+                "available=${availableQualities.joinToString(",")} ${hlsUrl.hlsDebugUrl()}",
+        )
+        return PlaybackSource.DirectMedia(
+            url = hlsUrl,
+            quality = selectedQuality,
+            availableQualities = availableQualities,
+        )
     }
 
     private fun parseKodikSecureData(
@@ -723,6 +752,14 @@ private fun VideoHubPlaylistItem.matchScore(hints: List<String>): Int {
 private fun String.normalizedVoiceName(): String = lowercase(Locale.ROOT)
     .replace(Regex("""^(озвучка|субтитры)\s*"""), "")
     .filter(Char::isLetterOrDigit)
+
+private fun String?.normalizedQualityKey(): String? = this
+    ?.trim()
+    ?.lowercase(Locale.ROOT)
+    ?.removeSuffix("p")
+    ?.takeIf { it.isNotBlank() && it != "auto" && it.all(Char::isDigit) }
+
+private fun String.qualityLabel(): String = if (all(Char::isDigit)) "${this}p" else this
 
 private fun String.toHttpUri(): URI? = runCatching { URI(trim()) }
     .getOrNull()

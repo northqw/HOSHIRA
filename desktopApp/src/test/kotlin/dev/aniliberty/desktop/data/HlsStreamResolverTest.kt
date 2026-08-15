@@ -127,11 +127,44 @@ class HlsStreamResolverTest {
         )
 
         assertEquals(expectedUrl, source.url)
+        assertEquals("720p", source.quality)
+        assertEquals(listOf("720p"), source.availableQualities)
         assertTrue(client.postRequests.isEmpty())
         val endpointRequest = client.requests.single { "/ftor?" in it }
         assertTrue("type=seria" in endpointRequest)
         assertTrue("id=7654321" in endpointRequest)
         assertTrue("hash=fedcba9876543210fedcba9876543210" in endpointRequest)
+    }
+
+    @Test
+    fun `Kodik honors a saved quality and reports available qualities`() {
+        val client = RecordingHlsClient(
+            responses = mapOf(
+                "kodikplayer.com/season/" to
+                    """
+                    <script>
+                      const serialId = Number(999999);
+                      const secure = '{"d":"kodikplayer.com","d_sign":"d-sign","pd":"kodikplayer.com","pd_sign":"pd-sign","ref":"%2Fwatch","ref_sign":"ref-sign"}';
+                      const vInfo = {type:'seria',id:7654321,hash:'fedcba9876543210fedcba9876543210'};
+                    </script>
+                    <script src="/assets/js/app.player_single.test.js"></script>
+                    """.trimIndent(),
+                "/assets/js/app.player_single.test.js" to
+                    """$.ajax({type:"GET",url:atob("L2Z0b3I=")})""",
+                "/ftor?" to
+                    """{"links":{"720":[{"src":"https://cdn.example/720.m3u8"}],"480":[{"src":"https://cdn.example/480.m3u8"}]}}""",
+            ),
+        )
+
+        val source = HlsStreamResolver(client).resolve(
+            url = "https://kodikplayer.com/season/116621/" +
+                "abcdef0123456789abcdef0123456789/720p?episode=1",
+            preferredQuality = "480p",
+        )
+
+        assertEquals("https://cdn.example/480.m3u8", source.url)
+        assertEquals("480p", source.quality)
+        assertEquals(listOf("720p", "480p"), source.availableQualities)
     }
 
     @Test

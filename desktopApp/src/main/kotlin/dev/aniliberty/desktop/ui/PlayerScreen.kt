@@ -93,6 +93,11 @@ fun PlayerScreen(
         ?: 0
     val previousEpisode = studioEpisodes.getOrNull(currentIndex - 1)
     val nextEpisode = studioEpisodes.getOrNull(currentIndex + 1)
+    // Playback callbacks persist these values and recompose the screen. Keep the
+    // initial values stable for this episode so persistence never remounts or
+    // reconfigures the active native stream.
+    val initialStartupVolume = remember(episode.id) { preferences.startupVolume }
+    val initialPreferredQuality = remember(episode.id) { preferredQuality }
     val chrome = EmbeddedPlayerChrome(
         title = release.displayName,
         subtitle = listOfNotNull(episode.shortTitle, episode.name)
@@ -109,8 +114,8 @@ fun PlayerScreen(
             )
         },
         resumeSeconds = session.resumeSeconds,
-        startupVolume = preferences.startupVolume,
-        preferredQuality = preferredQuality,
+        startupVolume = initialStartupVolume,
+        preferredQuality = initialPreferredQuality,
         autoplayNext = preferences.autoplayNext,
         controlsHideDelayMs = preferences.controlsHideDelayMs,
         preferredVoice = episode.name,

@@ -114,7 +114,13 @@ fun PlayerScreen(
         ?: 0
     val previousEpisode = studioEpisodes.getOrNull(currentIndex - 1)
     val nextEpisode = studioEpisodes.getOrNull(currentIndex + 1)
-    var hasLoadedProvider by remember { mutableStateOf(false) }
+    val currentPreviousEpisode by rememberUpdatedState(previousEpisode)
+    val currentNextEpisode by rememberUpdatedState(nextEpisode)
+    val currentSourceCandidates by rememberUpdatedState(sourceCandidates)
+    val currentAutoplayNext by rememberUpdatedState(preferences.autoplayNext)
+    val initialStartupVolume = remember(session.episode.id) { preferences.startupVolume }
+    val initialPreferredQuality = remember(session.episode.id) { preferredQuality }
+    var hasLoadedProvider by remember(playerUrl) { mutableStateOf(false) }
     val hostConfig = AndroidPlayerHostConfig(
         playerUrl = playerUrl,
         title = session.release.displayName,
@@ -129,15 +135,15 @@ fun PlayerScreen(
             )
         },
         resumeSeconds = session.resumeSeconds,
-        startupVolume = preferences.startupVolume,
-        preferredQuality = preferredQuality,
+        startupVolume = initialStartupVolume,
+        preferredQuality = initialPreferredQuality,
         hasPrevious = previousEpisode != null,
         hasNext = nextEpisode != null,
         controlsHideDelayMs = preferences.controlsHideDelayMs,
         showLoading = !hasLoadedProvider,
     )
 
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember(playerUrl) { mutableStateOf(true) }
     var error by remember(playerUrl) { mutableStateOf<String?>(null) }
     var playerDetected by remember(playerUrl) { mutableStateOf(false) }
     val debugStartedAt = remember(playerUrl) { SystemClock.elapsedRealtime() }
@@ -219,8 +225,8 @@ fun PlayerScreen(
                     onMetrics = {},
                     onPlayback = currentPlayback,
                     onEnded = {
-                        if (preferences.autoplayNext) {
-                            nextEpisode?.let(currentPlayEpisode)
+                        if (currentAutoplayNext) {
+                            currentNextEpisode?.let(currentPlayEpisode)
                         }
                     },
                     onHostAction = { action, value ->
@@ -235,9 +241,9 @@ fun PlayerScreen(
                                 addDebugEvent("provider-content-error ${value.take(160)}")
                             }
                             "back" -> currentBack()
-                            "previous" -> previousEpisode?.let(currentPlayEpisode)
-                            "next" -> nextEpisode?.let(currentPlayEpisode)
-                            "source" -> sourceCandidates
+                            "previous" -> currentPreviousEpisode?.let(currentPlayEpisode)
+                            "next" -> currentNextEpisode?.let(currentPlayEpisode)
+                            "source" -> currentSourceCandidates
                                 .firstOrNull { it.id == value }
                                 ?.let(currentPlayEpisode)
                         }
@@ -256,6 +262,7 @@ fun PlayerScreen(
             update = { webView ->
                 val webViewState = webView.tag as? PlayerWebViewState
                 if (webViewState?.url != playerUrl) {
+                    loading = true
                     error = null
                     playerDetected = false
                     addDebugEvent("reload ${sanitizeUrl(playerUrl)}")

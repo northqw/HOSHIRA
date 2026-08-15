@@ -4,19 +4,30 @@ import dev.aniliberty.desktop.data.HlsStreamResolver
 import dev.aniliberty.desktop.data.hlsDebugUrl
 import java.awt.BorderLayout
 import java.awt.Color as AwtColor
+import java.awt.Dimension
 import java.awt.EventQueue
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.RenderingHints
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.MouseMotionAdapter
+import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import javafx.animation.KeyFrame
 import javafx.animation.PauseTransition
+import javafx.animation.Timeline
 import javafx.application.Platform
 import javafx.embed.swing.JFXPanel
+import javafx.event.EventHandler
 import javafx.geometry.Insets
 import javafx.geometry.Pos
 import javafx.scene.Cursor
 import javafx.scene.Scene
+import javafx.scene.SnapshotParameters
 import javafx.scene.control.Button
 import javafx.scene.control.Label
 import javafx.scene.control.MenuButton
@@ -25,6 +36,8 @@ import javafx.scene.control.ProgressIndicator
 import javafx.scene.control.Slider
 import javafx.scene.input.KeyCode
 import javafx.scene.input.MouseEvent
+import javafx.scene.image.PixelFormat
+import javafx.scene.image.WritableImage
 import javafx.scene.layout.BorderPane
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Priority
@@ -35,7 +48,15 @@ import javafx.scene.media.MediaPlayer
 import javafx.scene.media.MediaView
 import javafx.scene.paint.Color
 import javafx.util.Duration
+import javax.swing.BorderFactory
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.JButton
+import javax.swing.JComboBox
+import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JSlider
+import javax.swing.SwingConstants
 import kotlin.concurrent.thread
 import kotlin.math.roundToLong
 
@@ -49,6 +70,7 @@ internal class NativeDesktopPlayerPanel(
     onStateChange: (EmbeddedPlayerState) -> Unit,
     onAction: (EmbeddedPlayerAction) -> Unit,
 ) : JPanel(BorderLayout()) {
+    private val videoSurface = AwtVideoSurface()
     private val fxPanel = JFXPanel().apply {
         background = AwtColor.BLACK
     }
@@ -76,6 +98,9 @@ internal class NativeDesktopPlayerPanel(
     private var fullscreen = false
 
     private var activeRequestUrl: String? = null
+    private var activeQuality: String? = null
+    private var availableQualities: List<String> = emptyList()
+    private var selectedQualityOverride: String? = initialChrome.preferredQuality
     private var mediaPlayer: MediaPlayer? = null
     private var root: StackPane? = null
     private var mediaView: MediaView? = null
@@ -93,17 +118,40 @@ internal class NativeDesktopPlayerPanel(
     private var elapsedLabel: Label? = null
     private var statusLabel: Label? = null
     private var statusSpinner: ProgressIndicator? = null
+    private var qualityLabel: Label? = null
     private var controlsTimer: PauseTransition? = null
+    private var frameCaptureTimer: Timeline? = null
+    private var snapshotImage: WritableImage? = null
+    private var snapshotBuffers: Array<BufferedImage>? = null
+    private var snapshotWriteIndex = 0
+    private var firstFrameLogged = false
     private var seeking = false
     private var lastPlaybackNotificationNanos = 0L
 
+    private val awtTitleLabel = JLabel()
+    private val awtSubtitleLabel = JLabel()
+    private val awtSourceSelector = JComboBox<String>()
+    private val awtQualitySelector = JComboBox<String>()
+    private val awtBackButton = JButton("←")
+    private val awtFullscreenButton = JButton("⛶")
+    private val awtPreviousButton = JButton("⏮")
+    private val awtPlayButton = JButton("▶")
+    private val awtNextButton = JButton("⏭")
+    private val awtElapsedLabel = JLabel("00:00 / 00:00")
+    private val awtSeekSlider = JSlider(0, SEEK_RANGE.toInt(), 0)
+    private val awtVolumeSlider = JSlider(0, 100, (initialChrome.startupVolume * 100).toInt())
+    private var awtSourceIds = emptyList<String>()
+    private var awtSourceUpdate = false
+    private var awtQualityUpdate = false
+    private var awtSeeking = false
+
     init {
         background = AwtColor.BLACK
-        add(fxPanel, BorderLayout.CENTER)
+        add(createAwtPlayerHost(), BorderLayout.CENTER)
         debugSession.record(
-            "JavaFX panel created prism=${System.getProperty("prism.order", "default")}",
+            "JavaFX decoder created prism=${System.getProperty("prism.order", "default")}",
         )
-        fxPanel.addComponentListener(
+        addComponentListener(
             object : ComponentAdapter() {
                 override fun componentShown(event: ComponentEvent?) {
                     scheduleSceneInstall("shown")
@@ -114,7 +162,7 @@ internal class NativeDesktopPlayerPanel(
                 }
             },
         )
-        fxPanel.addMouseMotionListener(
+        videoSurface.addMouseMotionListener(
             object : MouseMotionAdapter() {
                 override fun mouseMoved(event: java.awt.event.MouseEvent?) {
                     Platform.runLater { showControls() }
@@ -151,6 +199,11 @@ internal class NativeDesktopPlayerPanel(
         val urlChanged = requestedUrl != url
         requestedUrl = url
         requestedChrome = chrome
+        if (urlChanged) {
+            selectedQualityOverride = chrome.preferredQuality
+            activeQuality = null
+            availableQualities = emptyList()
+        }
         Platform.runLater {
             updateChrome(chrome)
         }
@@ -161,6 +214,9 @@ internal class NativeDesktopPlayerPanel(
 
     fun setFullscreenState(fullscreen: Boolean) {
         this.fullscreen = fullscreen
+        EventQueue.invokeLater {
+            awtFullscreenButton.text = if (fullscreen) "🗗" else "⛶"
+        }
         Platform.runLater {
             fullscreenButton?.text = if (fullscreen) "🗗" else "⛶"
         }
@@ -176,11 +232,161 @@ internal class NativeDesktopPlayerPanel(
             emitPlayback(oldActionCallback)
             controlsTimer?.stop()
             controlsTimer = null
+            frameCaptureTimer?.stop()
+            frameCaptureTimer = null
             mediaPlayer?.stop()
             mediaPlayer?.dispose()
             mediaPlayer = null
             mediaView?.mediaPlayer = null
             fxPanel.scene = null
+        }
+    }
+
+    private fun createAwtPlayerHost(): JPanel {
+        val heading = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(awtTitleLabel)
+            add(awtSubtitleLabel)
+        }
+        awtTitleLabel.apply {
+            foreground = AWT_TEXT
+            font = Font(Font.SANS_SERIF, Font.BOLD, 17)
+        }
+        awtSubtitleLabel.apply {
+            foreground = AWT_MUTED
+            font = Font(Font.SANS_SERIF, Font.PLAIN, 12)
+        }
+        awtSourceSelector.apply {
+            preferredSize = Dimension(145, 34)
+            maximumSize = Dimension(190, 34)
+            background = AWT_CONTROL
+            foreground = AWT_TEXT
+            isFocusable = false
+            addActionListener {
+                if (awtSourceUpdate) return@addActionListener
+                val index = selectedIndex
+                awtSourceIds.getOrNull(index)?.let { episodeId ->
+                    emitAction(EmbeddedPlayerAction.SelectSource(episodeId))
+                }
+            }
+        }
+        styleAwtButton(awtBackButton) {
+            emitAction(EmbeddedPlayerAction.Back)
+        }
+        styleAwtButton(awtFullscreenButton) {
+            emitAction(EmbeddedPlayerAction.SetFullscreen(!fullscreen))
+        }
+        val upper = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            background = AWT_BAR
+            border = BorderFactory.createEmptyBorder(14, 18, 14, 18)
+            add(awtBackButton)
+            add(Box.createHorizontalStrut(14))
+            add(heading)
+            add(Box.createHorizontalGlue())
+            add(awtSourceSelector)
+            add(Box.createHorizontalStrut(12))
+            add(awtFullscreenButton)
+        }
+
+        styleAwtButton(awtPreviousButton) {
+            emitAction(EmbeddedPlayerAction.Previous)
+        }
+        styleAwtButton(awtPlayButton) {
+            Platform.runLater { togglePlayback() }
+        }
+        styleAwtButton(awtNextButton) {
+            emitAction(EmbeddedPlayerAction.Next)
+        }
+        awtElapsedLabel.apply {
+            foreground = AWT_TEXT
+            font = Font(Font.MONOSPACED, Font.BOLD, 12)
+            horizontalAlignment = SwingConstants.CENTER
+            preferredSize = Dimension(132, 34)
+        }
+        awtSeekSlider.apply {
+            isOpaque = false
+            addChangeListener {
+                if (valueIsAdjusting) {
+                    awtSeeking = true
+                } else if (awtSeeking) {
+                    awtSeeking = false
+                    val value = value
+                    Platform.runLater {
+                        val player = mediaPlayer ?: return@runLater
+                        val duration = player.totalDuration.safeSeconds()
+                        if (duration > 0.0) {
+                            player.seek(
+                                Duration.seconds(duration * value / SEEK_RANGE),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        awtVolumeSlider.apply {
+            isOpaque = false
+            preferredSize = Dimension(120, 32)
+            maximumSize = Dimension(140, 32)
+            addChangeListener {
+                val volume = value / 100.0
+                Platform.runLater {
+                    mediaPlayer?.volume = volume
+                    if (!valueIsAdjusting) emitPlayback()
+                }
+            }
+        }
+        awtQualitySelector.apply {
+            preferredSize = Dimension(92, 32)
+            maximumSize = Dimension(110, 32)
+            background = AWT_CONTROL
+            foreground = AWT_ACCENT
+            isFocusable = false
+            addActionListener {
+                if (awtQualityUpdate) return@addActionListener
+                (selectedItem as? String)?.let(::selectQuality)
+            }
+        }
+        val playbackRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            add(awtPreviousButton)
+            add(Box.createHorizontalStrut(8))
+            add(awtPlayButton)
+            add(Box.createHorizontalStrut(8))
+            add(awtNextButton)
+            add(Box.createHorizontalStrut(12))
+            add(awtElapsedLabel)
+            add(Box.createHorizontalGlue())
+            add(awtQualitySelector)
+            add(Box.createHorizontalStrut(16))
+            add(JLabel("🔊").apply { foreground = AWT_TEXT })
+            add(Box.createHorizontalStrut(5))
+            add(awtVolumeSlider)
+        }
+        val lower = JPanel(BorderLayout(0, 7)).apply {
+            background = AWT_BAR
+            border = BorderFactory.createEmptyBorder(10, 18, 14, 18)
+            add(awtSeekSlider, BorderLayout.NORTH)
+            add(playbackRow, BorderLayout.CENTER)
+        }
+        return JPanel(BorderLayout()).apply {
+            background = AwtColor.BLACK
+            add(upper, BorderLayout.NORTH)
+            add(videoSurface, BorderLayout.CENTER)
+            add(lower, BorderLayout.SOUTH)
+        }
+    }
+
+    private fun styleAwtButton(button: JButton, action: () -> Unit) {
+        button.apply {
+            foreground = AWT_TEXT
+            background = AWT_CONTROL
+            font = Font(Font.SANS_SERIF, Font.BOLD, 15)
+            isFocusPainted = false
+            border = BorderFactory.createEmptyBorder(8, 13, 8, 13)
+            addActionListener { action() }
         }
     }
 
@@ -234,7 +440,12 @@ internal class NativeDesktopPlayerPanel(
         root = sceneRoot
         mediaView = video
         video.mediaPlayer = mediaPlayer
-        fxPanel.scene = Scene(sceneRoot, Color.BLACK)
+        fxPanel.scene = Scene(
+            sceneRoot,
+            CAPTURE_WIDTH.toDouble(),
+            CAPTURE_HEIGHT.toDouble(),
+            Color.BLACK,
+        )
         updateChrome(requestedChrome)
         when (mediaPlayer?.status) {
             MediaPlayer.Status.READY,
@@ -244,6 +455,7 @@ internal class NativeDesktopPlayerPanel(
             -> {
                 hideStatus()
                 updatePlaybackPosition()
+                startFrameCapture()
                 playButton?.text =
                     if (mediaPlayer?.status == MediaPlayer.Status.PLAYING) "❚❚" else "▶"
                 showControls(permanent = mediaPlayer?.status != MediaPlayer.Status.PLAYING)
@@ -251,7 +463,7 @@ internal class NativeDesktopPlayerPanel(
             else -> showResolving("Получаем прямой HLS-поток…")
         }
         debugSession.record(
-            "JavaFX scene installed size=${fxPanel.width}x${fxPanel.height} " +
+            "JavaFX decoder scene installed size=${CAPTURE_WIDTH}x$CAPTURE_HEIGHT " +
                 "playerAttached=${video.mediaPlayer != null}",
         )
         requestSurfaceRepaint()
@@ -261,8 +473,8 @@ internal class NativeDesktopPlayerPanel(
         if (disposed.get() || sceneInstalled.get()) return
         EventQueue.invokeLater {
             if (disposed.get() || sceneInstalled.get()) return@invokeLater
-            val width = fxPanel.width
-            val height = fxPanel.height
+            val width = this@NativeDesktopPlayerPanel.width
+            val height = this@NativeDesktopPlayerPanel.height
             if (width <= 0 || height <= 0) {
                 debugSession.record(
                     "JavaFX scene deferred reason=$reason size=${width}x$height",
@@ -281,6 +493,12 @@ internal class NativeDesktopPlayerPanel(
                     if (!disposed.get() && sceneInstalled.compareAndSet(false, true)) {
                         installScene()
                     }
+                } catch (error: Throwable) {
+                    sceneInstalled.set(false)
+                    debugSession.record(
+                        "JavaFX decoder scene failed type=${error.javaClass.simpleName} " +
+                            "message=${error.message ?: "unknown"}",
+                    )
                 } finally {
                     sceneInstallScheduled.set(false)
                 }
@@ -346,7 +564,7 @@ internal class NativeDesktopPlayerPanel(
             minWidth = 118.0
             style = LABEL_STYLE
         }
-        val qualityLabel = Label("HLS · AUTO").apply {
+        qualityLabel = Label("HLS").apply {
             style = BADGE_STYLE
         }
         val volumeGlyph = Label("🔊").apply {
@@ -404,12 +622,29 @@ internal class NativeDesktopPlayerPanel(
         }
     }
 
-    private fun startResolution() {
+    private fun startResolution(
+        keepCurrentFrame: Boolean = false,
+        resumeSeconds: Double? = null,
+        volume: Double? = null,
+    ) {
         val currentGeneration = generation.incrementAndGet()
+        if (!keepCurrentFrame) {
+            Platform.runLater {
+                frameCaptureTimer?.stop()
+                frameCaptureTimer = null
+                snapshotImage = null
+                snapshotBuffers = null
+            }
+            EventQueue.invokeLater {
+                videoSurface.frame = null
+                videoSurface.status = "Проверяем HLS-источник…"
+                videoSurface.repaint()
+            }
+        }
         debugSession.restart()
         debugSession.record(
-                "JavaFX surface displayable=${fxPanel.isDisplayable} " +
-                "showing=${fxPanel.isShowing} size=${fxPanel.width}x${fxPanel.height} " +
+                "Swing surface displayable=$isDisplayable " +
+                "showing=$isShowing size=${width}x$height " +
                 "sceneInstalled=${sceneInstalled.get()} " +
                 "prism=${System.getProperty("prism.order", "default")}",
         )
@@ -443,15 +678,17 @@ internal class NativeDesktopPlayerPanel(
             "playable=${urls.size} candidates=" +
                 urls.joinToString { it.hlsDebugUrl() },
         )
-        notifyState(EmbeddedPlayerState.Starting)
-        Platform.runLater {
-            showResolving(
-                if (urls.isEmpty()) {
-                    "Ищем совместимый HLS-источник…"
-                } else {
-                    "Проверяем HLS-источники…"
-                },
-            )
+        if (!keepCurrentFrame) {
+            notifyState(EmbeddedPlayerState.Starting)
+            Platform.runLater {
+                showResolving(
+                    if (urls.isEmpty()) {
+                        "Ищем совместимый HLS-источник…"
+                    } else {
+                        "Проверяем HLS-источники…"
+                    },
+                )
+            }
         }
         if (urls.isEmpty()) {
             fail(
@@ -465,6 +702,9 @@ internal class NativeDesktopPlayerPanel(
             var lastError: Throwable? = null
             var resolvedUrl: String? = null
             var resolvedSourceUrl: String? = null
+            var resolvedQuality: String? = null
+            var resolvedQualities: List<String> = emptyList()
+            val preferredQuality = selectedQualityOverride ?: requestedChrome.preferredQuality
             for (url in urls) {
                 val diagnostic = resolver.inspect(url)
                 debugSession.record(
@@ -472,11 +712,17 @@ internal class NativeDesktopPlayerPanel(
                         "url=${url.hlsDebugUrl()}",
                 )
                 val result = runCatching {
-                    resolver.resolve(url, requestedChrome.preferredVoice)
+                    resolver.resolve(
+                        url = url,
+                        preferredVoice = requestedChrome.preferredVoice,
+                        preferredQuality = preferredQuality,
+                    )
                 }
                 result.onSuccess { source ->
                     resolvedUrl = url
                     resolvedSourceUrl = source.url
+                    resolvedQuality = source.quality
+                    resolvedQualities = source.availableQualities
                 }.onFailure { error ->
                     lastError = error
                     debugSession.record(
@@ -495,7 +741,14 @@ internal class NativeDesktopPlayerPanel(
                     if (!disposed.get() && generation.get() == currentGeneration) {
                         activeRequestUrl = requestUrl
                         updateChrome(requestedChrome)
-                        openMedia(mediaUrl, currentGeneration)
+                        openMedia(
+                            hlsUrl = mediaUrl,
+                            currentGeneration = currentGeneration,
+                            quality = resolvedQuality,
+                            qualities = resolvedQualities,
+                            resumeSeconds = resumeSeconds,
+                            volume = volume,
+                        )
                     }
                 }
             } else {
@@ -537,20 +790,36 @@ internal class NativeDesktopPlayerPanel(
         }
     }
 
-    private fun openMedia(hlsUrl: String, currentGeneration: Long) {
+    private fun openMedia(
+        hlsUrl: String,
+        currentGeneration: Long,
+        quality: String?,
+        qualities: List<String>,
+        resumeSeconds: Double?,
+        volume: Double?,
+    ) {
         try {
             debugSession.record("JavaFX Media opening ${hlsUrl.hlsDebugUrl()}")
+            frameCaptureTimer?.stop()
+            frameCaptureTimer = null
             mediaPlayer?.stop()
             mediaPlayer?.dispose()
             val media = Media(hlsUrl)
             val player = MediaPlayer(media)
             mediaPlayer = player
             mediaView?.mediaPlayer = player
-            player.volume = requestedChrome.startupVolume.toDouble().coerceIn(0.0, 1.0)
+            player.volume = (volume ?: requestedChrome.startupVolume.toDouble())
+                .coerceIn(0.0, 1.0)
             volumeSlider?.value = player.volume
+            EventQueue.invokeLater {
+                awtVolumeSlider.value = (player.volume * 100).toInt().coerceIn(0, 100)
+            }
+            activeQuality = quality
+            availableQualities = qualities
+            updateQualityControls()
             player.onReady = Runnable {
                 if (disposed.get() || generation.get() != currentGeneration) return@Runnable
-                requestedChrome.resumeSeconds
+                (resumeSeconds ?: requestedChrome.resumeSeconds)
                     .takeIf { it > 0.0 }
                     ?.let { player.seek(Duration.seconds(it)) }
                 hideStatus()
@@ -560,6 +829,7 @@ internal class NativeDesktopPlayerPanel(
                         "view=${mediaView?.fitWidth?.toInt()}x${mediaView?.fitHeight?.toInt()} " +
                         "tracks=${media.tracks.joinToString { it.javaClass.simpleName }}",
                 )
+                startFrameCapture()
                 notifyState(EmbeddedPlayerState.Ready)
                 player.play()
                 root?.requestFocus()
@@ -568,15 +838,18 @@ internal class NativeDesktopPlayerPanel(
             player.onPlaying = Runnable {
                 debugSession.record("JavaFX playing")
                 playButton?.text = "❚❚"
+                EventQueue.invokeLater { awtPlayButton.text = "❚❚" }
                 scheduleControlsHide()
             }
             player.onPaused = Runnable {
                 playButton?.text = "▶"
+                EventQueue.invokeLater { awtPlayButton.text = "▶" }
                 showControls(permanent = true)
                 emitPlayback()
             }
             player.onStopped = Runnable {
                 playButton?.text = "▶"
+                EventQueue.invokeLater { awtPlayButton.text = "▶" }
                 emitPlayback()
             }
             player.onEndOfMedia = Runnable {
@@ -586,6 +859,7 @@ internal class NativeDesktopPlayerPanel(
                 } else {
                     showControls(permanent = true)
                     playButton?.text = "↻"
+                    EventQueue.invokeLater { awtPlayButton.text = "↻" }
                 }
             }
             player.onError = Runnable {
@@ -610,6 +884,76 @@ internal class NativeDesktopPlayerPanel(
                 currentGeneration,
                 error.message ?: "Не удалось запустить HLS-поток.",
                 error,
+            )
+        }
+    }
+
+    private fun startFrameCapture() {
+        val video = mediaView ?: return
+        frameCaptureTimer?.stop()
+        snapshotImage = WritableImage(CAPTURE_WIDTH, CAPTURE_HEIGHT)
+        snapshotBuffers = Array(2) {
+            BufferedImage(
+                CAPTURE_WIDTH,
+                CAPTURE_HEIGHT,
+                BufferedImage.TYPE_INT_ARGB_PRE,
+            )
+        }
+        snapshotWriteIndex = 0
+        firstFrameLogged = false
+        val parameters = SnapshotParameters().apply {
+            fill = Color.BLACK
+        }
+        frameCaptureTimer = Timeline(
+            KeyFrame(
+                Duration.millis(FRAME_CAPTURE_INTERVAL_MS),
+                EventHandler { captureVideoFrame(video, parameters) },
+            ),
+        ).apply {
+            cycleCount = Timeline.INDEFINITE
+            play()
+        }
+        debugSession.record(
+            "Swing frame capture started ${CAPTURE_WIDTH}x$CAPTURE_HEIGHT " +
+                "interval=${FRAME_CAPTURE_INTERVAL_MS.toInt()}ms",
+        )
+    }
+
+    private fun captureVideoFrame(
+        video: MediaView,
+        parameters: SnapshotParameters,
+    ) {
+        if (disposed.get()) return
+        val image = snapshotImage ?: return
+        val buffers = snapshotBuffers ?: return
+        val target = buffers[snapshotWriteIndex]
+        try {
+            video.snapshot(parameters, image)
+            val pixels = (target.raster.dataBuffer as DataBufferInt).data
+            image.pixelReader.getPixels(
+                0,
+                0,
+                CAPTURE_WIDTH,
+                CAPTURE_HEIGHT,
+                PixelFormat.getIntArgbPreInstance(),
+                pixels,
+                0,
+                CAPTURE_WIDTH,
+            )
+            videoSurface.frame = target
+            snapshotWriteIndex = (snapshotWriteIndex + 1) % buffers.size
+            if (!firstFrameLogged) {
+                firstFrameLogged = true
+                debugSession.record("Swing first video frame captured")
+            }
+            EventQueue.invokeLater {
+                if (!disposed.get()) videoSurface.repaint()
+            }
+        } catch (error: Throwable) {
+            frameCaptureTimer?.stop()
+            debugSession.record(
+                "Swing frame capture failed type=${error.javaClass.simpleName} " +
+                    "message=${error.message ?: "unknown"}",
             )
         }
     }
@@ -643,6 +987,69 @@ internal class NativeDesktopPlayerPanel(
             isVisible = playableSources.size > 1
             isManaged = isVisible
         }
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            awtTitleLabel.text = chrome.title
+            awtSubtitleLabel.text = listOf(chrome.subtitle, chrome.position)
+                .filter(String::isNotBlank)
+                .joinToString(" · ")
+            awtPreviousButton.isEnabled = chrome.hasPrevious
+            awtNextButton.isEnabled = chrome.hasNext
+            awtFullscreenButton.text = if (fullscreen) "🗗" else "⛶"
+            awtSourceUpdate = true
+            try {
+                awtSourceIds = playableSources.map(EmbeddedPlayerSource::episodeId)
+                awtSourceSelector.removeAllItems()
+                playableSources.forEach { source ->
+                    awtSourceSelector.addItem(source.label)
+                }
+                awtSourceSelector.selectedIndex = if (playableSources.isEmpty()) {
+                    -1
+                } else {
+                    playableSources.indexOfFirst {
+                        it.episodeId == selectedSource?.episodeId
+                    }.takeIf { it >= 0 } ?: 0
+                }
+                awtSourceSelector.isVisible = playableSources.size > 1
+            } finally {
+                awtSourceUpdate = false
+            }
+        }
+    }
+
+    private fun updateQualityControls() {
+        val current = activeQuality
+        qualityLabel?.text = current?.let { "HLS · $it" } ?: "HLS"
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            awtQualityUpdate = true
+            try {
+                awtQualitySelector.removeAllItems()
+                val options = availableQualities.ifEmpty { listOfNotNull(current) }
+                options.forEach(awtQualitySelector::addItem)
+                awtQualitySelector.selectedItem = current
+                awtQualitySelector.isEnabled = options.size > 1
+                awtQualitySelector.isVisible = options.isNotEmpty()
+            } finally {
+                awtQualityUpdate = false
+            }
+        }
+    }
+
+    private fun selectQuality(quality: String) {
+        if (quality == activeQuality || quality !in availableQualities) return
+        val resumeSeconds = mediaPlayer?.currentTime?.safeSeconds()
+        val volume = mediaPlayer?.volume
+        selectedQualityOverride = quality
+        debugSession.record(
+            "quality switch from=${activeQuality ?: "unknown"} to=$quality " +
+                "resume=${resumeSeconds ?: 0.0}s",
+        )
+        startResolution(
+            keepCurrentFrame = true,
+            resumeSeconds = resumeSeconds,
+            volume = volume,
+        )
     }
 
     private fun updatePlaybackPosition() {
@@ -653,6 +1060,13 @@ internal class NativeDesktopPlayerPanel(
             seekSlider?.value = (position / duration * SEEK_RANGE).coerceIn(0.0, SEEK_RANGE)
         }
         elapsedLabel?.text = "${position.clockText()} / ${duration.clockText()}"
+        EventQueue.invokeLater {
+            if (!awtSeeking && duration > 0.0) {
+                awtSeekSlider.value =
+                    (position / duration * SEEK_RANGE).toInt().coerceIn(0, SEEK_RANGE.toInt())
+            }
+            awtElapsedLabel.text = "${position.clockText()} / ${duration.clockText()}"
+        }
         val now = System.nanoTime()
         if (now - lastPlaybackNotificationNanos >= PLAYBACK_NOTIFICATION_NANOS) {
             lastPlaybackNotificationNanos = now
@@ -702,6 +1116,10 @@ internal class NativeDesktopPlayerPanel(
         statusLabel?.isManaged = true
         statusSpinner?.isVisible = true
         statusSpinner?.isManaged = true
+        EventQueue.invokeLater {
+            videoSurface.status = message
+            videoSurface.repaint()
+        }
         showControls(permanent = true)
     }
 
@@ -710,6 +1128,10 @@ internal class NativeDesktopPlayerPanel(
         statusLabel?.isManaged = false
         statusSpinner?.isVisible = false
         statusSpinner?.isManaged = false
+        EventQueue.invokeLater {
+            videoSurface.status = null
+            videoSurface.repaint()
+        }
     }
 
     private fun showControls(permanent: Boolean = false) {
@@ -763,11 +1185,17 @@ internal class NativeDesktopPlayerPanel(
             mediaPlayer?.dispose()
             mediaPlayer = null
             mediaView?.mediaPlayer = null
+            frameCaptureTimer?.stop()
+            frameCaptureTimer = null
             statusSpinner?.isVisible = false
             statusSpinner?.isManaged = false
             statusLabel?.text = message
             statusLabel?.isVisible = true
             statusLabel?.isManaged = true
+            EventQueue.invokeLater {
+                videoSurface.status = message
+                videoSurface.repaint()
+            }
             notifyState(
                 EmbeddedPlayerState.Failed(
                     message = message,
@@ -787,7 +1215,7 @@ internal class NativeDesktopPlayerPanel(
                     positionSeconds = position,
                     durationSeconds = duration,
                     volume = player.volume.toFloat(),
-                    quality = "AUTO",
+                    quality = activeQuality,
                 ),
             )
         }
@@ -810,8 +1238,67 @@ internal class NativeDesktopPlayerPanel(
             if (disposed.get()) return@invokeLater
             fxPanel.revalidate()
             fxPanel.repaint()
+            videoSurface.revalidate()
+            videoSurface.repaint()
             revalidate()
             repaint()
+        }
+    }
+}
+
+private class AwtVideoSurface : JPanel() {
+    @Volatile
+    var frame: BufferedImage? = null
+
+    @Volatile
+    var status: String? = "Подготавливаем HLS-поток…"
+
+    init {
+        background = AwtColor.BLACK
+        isOpaque = true
+        minimumSize = Dimension(1, 1)
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        super.paintComponent(graphics)
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            graphics2D.color = AwtColor.BLACK
+            graphics2D.fillRect(0, 0, width, height)
+            frame?.let { image ->
+                val scale = minOf(
+                    width.toDouble() / image.width.coerceAtLeast(1),
+                    height.toDouble() / image.height.coerceAtLeast(1),
+                )
+                val drawWidth = (image.width * scale).toInt().coerceAtLeast(1)
+                val drawHeight = (image.height * scale).toInt().coerceAtLeast(1)
+                val drawX = (width - drawWidth) / 2
+                val drawY = (height - drawHeight) / 2
+                graphics2D.setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_BILINEAR,
+                )
+                graphics2D.drawImage(
+                    image,
+                    drawX,
+                    drawY,
+                    drawWidth,
+                    drawHeight,
+                    null,
+                )
+            }
+            if (frame == null) {
+                status?.let { message ->
+                    graphics2D.color = AWT_MUTED
+                    graphics2D.font = Font(Font.SANS_SERIF, Font.BOLD, 15)
+                    val metrics = graphics2D.fontMetrics
+                    val textX = ((width - metrics.stringWidth(message)) / 2).coerceAtLeast(16)
+                    val textY = (height + metrics.ascent) / 2
+                    graphics2D.drawString(message, textX, textY)
+                }
+            }
+        } finally {
+            graphics2D.dispose()
         }
     }
 }
@@ -838,7 +1325,15 @@ private fun Double.clockText(): String {
 }
 
 private const val SEEK_RANGE = 1_000.0
+private const val CAPTURE_WIDTH = 1_280
+private const val CAPTURE_HEIGHT = 720
+private const val FRAME_CAPTURE_INTERVAL_MS = 40.0
 private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
+private val AWT_TEXT = AwtColor(0xF7, 0xF7, 0xFA)
+private val AWT_MUTED = AwtColor(0xB9, 0xBA, 0xC5)
+private val AWT_ACCENT = AwtColor(0xFF, 0x8F, 0xC8)
+private val AWT_CONTROL = AwtColor(0x25, 0x26, 0x2D)
+private val AWT_BAR = AwtColor(0x10, 0x11, 0x15)
 private const val LABEL_STYLE =
     "-fx-text-fill: #f7f7fa; -fx-font-size: 13px; -fx-font-weight: 700;"
 private const val MUTED_LABEL_STYLE =

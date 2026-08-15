@@ -8,6 +8,8 @@ sealed interface PlaybackSource {
     data class DirectMedia(
         val url: String,
         val headers: Map<String, String> = emptyMap(),
+        val quality: String? = null,
+        val availableQualities: List<String> = emptyList(),
     ) : PlaybackSource
 
     data class ExternalPlayerPage(
