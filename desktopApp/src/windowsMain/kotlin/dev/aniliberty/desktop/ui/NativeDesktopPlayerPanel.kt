@@ -7,16 +7,21 @@ import java.awt.Color as AwtColor
 import java.awt.Dimension
 import java.awt.EventQueue
 import java.awt.Font
-import java.awt.GradientPaint
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.LinearGradientPaint
 import java.awt.RenderingHints
+import java.awt.BasicStroke
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseMotionAdapter
 import java.awt.geom.RoundRectangle2D
+import java.awt.geom.Arc2D
+import java.awt.geom.Ellipse2D
+import java.awt.geom.Path2D
+import java.awt.geom.Point2D
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 import java.util.concurrent.atomic.AtomicBoolean
@@ -141,17 +146,36 @@ internal class NativeDesktopPlayerPanel(
     private var seeking = false
     private var lastPlaybackNotificationNanos = 0L
 
-    private val awtTitleLabel = JLabel()
+    private val awtTitleLabel = EllipsizedLabel(MAX_TITLE_CHARACTERS)
     private val awtSubtitleLabel = JLabel()
     private val awtSourceSelector = JComboBox<String>()
     private val awtQualitySelector = JComboBox<String>()
     private val awtBackButton = HoshiraPlayerButton("←   Назад", pill = true)
-    private val awtFullscreenButton = HoshiraPlayerButton("⛶", pill = true)
-    private val awtRewindButton = HoshiraPlayerButton("↶10", pill = true)
-    private val awtPlayButton = HoshiraPlayerButton("▶", pill = true)
-    private val awtForwardButton = HoshiraPlayerButton("10↷", pill = true)
-    private val awtNextButton = HoshiraPlayerButton("›", accent = true, pill = true)
-    private val awtVolumeButton = HoshiraPlayerButton("🔊", pill = true)
+    private val awtFullscreenButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.Fullscreen,
+    )
+    private val awtRewindButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.RewindTen,
+    )
+    private val awtPlayButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.Play,
+    )
+    private val awtForwardButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.ForwardTen,
+    )
+    private val awtNextButton = HoshiraPlayerButton(
+        accent = true,
+        circular = true,
+        glyph = PlayerGlyph.Next,
+    )
+    private val awtVolumeButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.Volume,
+    )
     private val awtElapsedLabel = JLabel("00:00 / 00:00")
     private val awtEpisodeLabel = JLabel()
     private val awtSeekSlider = JSlider(0, SEEK_RANGE.toInt(), 0)
@@ -196,6 +220,7 @@ internal class NativeDesktopPlayerPanel(
     override fun addNotify() {
         super.addNotify()
         scheduleSceneInstall("addNotify")
+        requestSurfaceRepaint()
         if (started.compareAndSet(false, true)) {
             startResolution()
         }
@@ -236,7 +261,8 @@ internal class NativeDesktopPlayerPanel(
     fun setFullscreenState(fullscreen: Boolean) {
         this.fullscreen = fullscreen
         EventQueue.invokeLater {
-            awtFullscreenButton.text = if (fullscreen) "🗗" else "⛶"
+            awtFullscreenButton.glyph =
+                if (fullscreen) PlayerGlyph.ExitFullscreen else PlayerGlyph.Fullscreen
         }
         Platform.runLater {
             fullscreenButton?.text = if (fullscreen) "🗗" else "⛶"
@@ -273,6 +299,7 @@ internal class NativeDesktopPlayerPanel(
         awtTitleLabel.apply {
             foreground = AWT_TEXT
             font = hoshiraFont(Font.BOLD, 21f)
+            maximumSize = Dimension(720, 29)
         }
         awtSubtitleLabel.apply {
             foreground = AWT_MUTED
@@ -357,7 +384,7 @@ internal class NativeDesktopPlayerPanel(
         styleAwtButton(awtVolumeButton) {
             val muted = awtVolumeSlider.value > 0
             awtVolumeSlider.value = if (muted) 0 else 100
-            awtVolumeButton.text = if (muted) "🔇" else "🔊"
+            awtVolumeButton.glyph = if (muted) PlayerGlyph.Muted else PlayerGlyph.Volume
         }
         awtVolumeButton.apply {
             preferredSize = Dimension(46, 46)
@@ -426,7 +453,8 @@ internal class NativeDesktopPlayerPanel(
                     mediaPlayer?.volume = volume
                     if (!valueIsAdjusting) emitPlayback()
                 }
-                awtVolumeButton.text = if (value == 0) "🔇" else "🔊"
+                awtVolumeButton.glyph =
+                    if (value == 0) PlayerGlyph.Muted else PlayerGlyph.Volume
             }
         }
         awtQualitySelector.apply {
@@ -1018,18 +1046,18 @@ internal class NativeDesktopPlayerPanel(
             player.onPlaying = Runnable {
                 debugSession.record("JavaFX playing")
                 playButton?.text = "❚❚"
-                EventQueue.invokeLater { awtPlayButton.text = "❚❚" }
+                EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Pause }
                 scheduleControlsHide()
             }
             player.onPaused = Runnable {
                 playButton?.text = "▶"
-                EventQueue.invokeLater { awtPlayButton.text = "▶" }
+                EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Play }
                 showControls(permanent = true)
                 emitPlayback()
             }
             player.onStopped = Runnable {
                 playButton?.text = "▶"
-                EventQueue.invokeLater { awtPlayButton.text = "▶" }
+                EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Play }
                 emitPlayback()
             }
             player.onEndOfMedia = Runnable {
@@ -1039,7 +1067,7 @@ internal class NativeDesktopPlayerPanel(
                 } else {
                     showControls(permanent = true)
                     playButton?.text = "↻"
-                    EventQueue.invokeLater { awtPlayButton.text = "↻" }
+                    EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Play }
                 }
             }
             player.onError = Runnable {
@@ -1173,7 +1201,8 @@ internal class NativeDesktopPlayerPanel(
             awtSubtitleLabel.text = chrome.subtitle
             awtEpisodeLabel.text = chrome.position
             awtNextButton.isEnabled = chrome.hasNext
-            awtFullscreenButton.text = if (fullscreen) "🗗" else "⛶"
+            awtFullscreenButton.glyph =
+                if (fullscreen) PlayerGlyph.ExitFullscreen else PlayerGlyph.Fullscreen
             awtSourceUpdate = true
             try {
                 awtSourceIds = playableSources.map(EmbeddedPlayerSource::episodeId)
@@ -1433,23 +1462,29 @@ private class ChromeOverlayPanel : JPanel() {
         val graphics2D = graphics.create() as Graphics2D
         try {
             enableHighQualityRendering(graphics2D)
-            graphics2D.paint = GradientPaint(
-                0f,
-                0f,
-                AwtColor(0, 0, 0, 178),
-                0f,
-                minOf(150, height / 4).toFloat(),
-                AwtColor(0, 0, 0, 0),
+            val topHeight = minOf(154, height.coerceAtLeast(1))
+            graphics2D.paint = LinearGradientPaint(
+                Point2D.Float(0f, 0f),
+                Point2D.Float(0f, topHeight.toFloat()),
+                floatArrayOf(0f, 0.48f, 1f),
+                arrayOf(
+                    AwtColor(3, 4, 6, 224),
+                    AwtColor(3, 4, 6, 172),
+                    AwtColor(3, 4, 6, 0),
+                ),
             )
-            graphics2D.fillRect(0, 0, width, minOf(180, height / 3))
-            val lowerStart = (height - minOf(210, height / 3)).coerceAtLeast(0)
-            graphics2D.paint = GradientPaint(
-                0f,
-                lowerStart.toFloat(),
-                AwtColor(0, 0, 0, 0),
-                0f,
-                height.toFloat(),
-                AwtColor(0, 0, 0, 215),
+            graphics2D.fillRect(0, 0, width, topHeight)
+            val bottomHeight = minOf(220, height.coerceAtLeast(1))
+            val lowerStart = (height - bottomHeight).coerceAtLeast(0)
+            graphics2D.paint = LinearGradientPaint(
+                Point2D.Float(0f, lowerStart.toFloat()),
+                Point2D.Float(0f, height.coerceAtLeast(1).toFloat()),
+                floatArrayOf(0f, 0.52f, 1f),
+                arrayOf(
+                    AwtColor(3, 4, 6, 0),
+                    AwtColor(3, 4, 6, 180),
+                    AwtColor(3, 4, 6, 245),
+                ),
             )
             graphics2D.fillRect(0, lowerStart, width, height - lowerStart)
         } finally {
@@ -1469,7 +1504,7 @@ private class PillControlPanel : JPanel(BorderLayout()) {
         try {
             enableHighQualityRendering(graphics2D)
             val arc = (height - 4).coerceAtLeast(12)
-            graphics2D.color = AwtColor(10, 11, 15, 196)
+            graphics2D.color = AwtColor(18, 19, 23)
             graphics2D.fillRoundRect(1, 1, width - 3, height - 3, arc, arc)
             graphics2D.color = AwtColor(255, 255, 255, 28)
             graphics2D.drawRoundRect(1, 1, width - 3, height - 3, arc, arc)
@@ -1580,11 +1615,34 @@ private class AwtVideoSurface : JPanel() {
     }
 }
 
+private class EllipsizedLabel(
+    private val characterLimit: Int,
+) : JLabel() {
+    override fun setText(value: String?) {
+        val text = value.orEmpty()
+        super.setText(
+            if (characterLimit > 3 && text.length > characterLimit) {
+                text.take(characterLimit - 1).trimEnd() + "…"
+            } else {
+                text
+            },
+        )
+    }
+}
+
 private class HoshiraPlayerButton(
-    text: String,
+    text: String = "",
     private val accent: Boolean = false,
     private val pill: Boolean = false,
+    private val circular: Boolean = false,
+    glyph: PlayerGlyph? = null,
 ) : JButton(text) {
+    var glyph: PlayerGlyph? = glyph
+        set(value) {
+            field = value
+            repaint()
+        }
+
     init {
         isOpaque = false
         isContentAreaFilled = false
@@ -1605,35 +1663,15 @@ private class HoshiraPlayerButton(
                 else -> AWT_CONTROL
             }
             val arc = if (pill) height.coerceAtLeast(14) else 14
-            graphics2D.color = AwtColor(0, 0, 0, if (accent) 82 else 48)
-            graphics2D.fillRoundRect(
-                2,
-                4,
-                (width - 4).coerceAtLeast(1),
-                (height - 6).coerceAtLeast(1),
-                arc,
-                arc,
-            )
-            graphics2D.paint = if (accent) {
-                GradientPaint(
-                    0f,
-                    1f,
-                    fill.brighter(),
-                    0f,
-                    height.toFloat(),
-                    fill,
+            val diameter = (minOf(width, height) - 4).coerceAtLeast(1)
+            val mainShape = if (circular) {
+                Ellipse2D.Double(
+                    ((width - diameter) / 2).toDouble(),
+                    1.0,
+                    diameter.toDouble(),
+                    diameter.toDouble(),
                 )
             } else {
-                GradientPaint(
-                    0f,
-                    1f,
-                    AwtColor(fill.red + 8, fill.green + 8, fill.blue + 9, fill.alpha),
-                    0f,
-                    height.toFloat(),
-                    fill,
-                )
-            }
-            graphics2D.fill(
                 RoundRectangle2D.Double(
                     1.0,
                     1.0,
@@ -1641,25 +1679,198 @@ private class HoshiraPlayerButton(
                     (height - 4).coerceAtLeast(1).toDouble(),
                     arc.toDouble(),
                     arc.toDouble(),
-                ),
-            )
+                )
+            }
+            val shadowShape = if (circular) {
+                Ellipse2D.Double(
+                    ((width - diameter) / 2).toDouble(),
+                    3.0,
+                    diameter.toDouble(),
+                    diameter.toDouble(),
+                )
+            } else {
+                RoundRectangle2D.Double(
+                    2.0,
+                    4.0,
+                    (width - 4).coerceAtLeast(1).toDouble(),
+                    (height - 6).coerceAtLeast(1).toDouble(),
+                    arc.toDouble(),
+                    arc.toDouble(),
+                )
+            }
+            graphics2D.color = AwtColor(0, 0, 0, if (accent) 82 else 48)
+            graphics2D.fill(shadowShape)
+            graphics2D.color = fill
+            graphics2D.fill(mainShape)
             if (!accent) {
                 graphics2D.color = if (model.isRollover) AWT_BORDER_HOVER else AWT_BORDER
-                graphics2D.draw(
-                    RoundRectangle2D.Double(
-                        1.5,
-                        1.5,
-                        (width - 3).coerceAtLeast(1).toDouble(),
-                        (height - 5).coerceAtLeast(1).toDouble(),
-                        arc.toDouble(),
-                        arc.toDouble(),
-                    ),
-                )
+                graphics2D.draw(mainShape)
             }
         } finally {
             graphics2D.dispose()
         }
         super.paintComponent(graphics)
+        glyph?.let { drawPlayerGlyph(graphics, it, isEnabled) }
+    }
+}
+
+private enum class PlayerGlyph {
+    Play,
+    Pause,
+    RewindTen,
+    ForwardTen,
+    Next,
+    Volume,
+    Muted,
+    Fullscreen,
+    ExitFullscreen,
+}
+
+private fun HoshiraPlayerButton.drawPlayerGlyph(
+    graphics: Graphics,
+    glyph: PlayerGlyph,
+    enabled: Boolean,
+) {
+    val graphics2D = graphics.create() as Graphics2D
+    try {
+        enableHighQualityRendering(graphics2D)
+        graphics2D.color = if (enabled) AWT_TEXT else AwtColor(247, 247, 250, 110)
+        graphics2D.stroke = BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+        val centerX = width / 2.0
+        val centerY = height / 2.0 - 1.0
+        when (glyph) {
+            PlayerGlyph.Play -> graphics2D.fill(
+                Path2D.Double().apply {
+                    moveTo(centerX - 5, centerY - 8)
+                    lineTo(centerX + 8, centerY)
+                    lineTo(centerX - 5, centerY + 8)
+                    closePath()
+                },
+            )
+            PlayerGlyph.Pause -> {
+                graphics2D.fillRoundRect((centerX - 7).toInt(), (centerY - 8).toInt(), 5, 16, 2, 2)
+                graphics2D.fillRoundRect((centerX + 2).toInt(), (centerY - 8).toInt(), 5, 16, 2, 2)
+            }
+            PlayerGlyph.RewindTen,
+            PlayerGlyph.ForwardTen,
+            -> drawTenSecondGlyph(graphics2D, centerX, centerY, glyph == PlayerGlyph.ForwardTen)
+            PlayerGlyph.Next -> {
+                graphics2D.drawLine(
+                    (centerX - 3).toInt(),
+                    (centerY - 7).toInt(),
+                    (centerX + 4).toInt(),
+                    centerY.toInt(),
+                )
+                graphics2D.drawLine(
+                    (centerX + 4).toInt(),
+                    centerY.toInt(),
+                    (centerX - 3).toInt(),
+                    (centerY + 7).toInt(),
+                )
+            }
+            PlayerGlyph.Volume,
+            PlayerGlyph.Muted,
+            -> drawVolumeGlyph(graphics2D, centerX, centerY, glyph == PlayerGlyph.Muted)
+            PlayerGlyph.Fullscreen,
+            PlayerGlyph.ExitFullscreen,
+            -> drawFullscreenGlyph(
+                graphics2D,
+                centerX,
+                centerY,
+                glyph == PlayerGlyph.ExitFullscreen,
+            )
+        }
+    } finally {
+        graphics2D.dispose()
+    }
+}
+
+private fun drawTenSecondGlyph(
+    graphics: Graphics2D,
+    centerX: Double,
+    centerY: Double,
+    forward: Boolean,
+) {
+    val start = if (forward) 230.0 else -50.0
+    val extent = if (forward) -275.0 else 275.0
+    graphics.draw(Arc2D.Double(centerX - 9, centerY - 9, 18.0, 18.0, start, extent, Arc2D.OPEN))
+    val arrow = Path2D.Double().apply {
+        if (forward) {
+            moveTo(centerX + 7, centerY - 8)
+            lineTo(centerX + 10, centerY - 3)
+            lineTo(centerX + 4, centerY - 3)
+        } else {
+            moveTo(centerX - 7, centerY - 8)
+            lineTo(centerX - 10, centerY - 3)
+            lineTo(centerX - 4, centerY - 3)
+        }
+        closePath()
+    }
+    graphics.fill(arrow)
+    graphics.font = hoshiraFont(Font.BOLD, 7.5f)
+    val text = "10"
+    val metrics = graphics.fontMetrics
+    graphics.drawString(
+        text,
+        (centerX - metrics.stringWidth(text) / 2.0).toFloat(),
+        (centerY + metrics.ascent / 2.0 - 1).toFloat(),
+    )
+}
+
+private fun drawVolumeGlyph(
+    graphics: Graphics2D,
+    centerX: Double,
+    centerY: Double,
+    muted: Boolean,
+) {
+    graphics.fill(
+        Path2D.Double().apply {
+            moveTo(centerX - 9, centerY - 3)
+            lineTo(centerX - 5, centerY - 3)
+            lineTo(centerX + 1, centerY - 8)
+            lineTo(centerX + 1, centerY + 8)
+            lineTo(centerX - 5, centerY + 3)
+            lineTo(centerX - 9, centerY + 3)
+            closePath()
+        },
+    )
+    if (muted) {
+        graphics.drawLine((centerX + 6).toInt(), (centerY - 5).toInt(), (centerX + 12).toInt(), (centerY + 5).toInt())
+        graphics.drawLine((centerX + 12).toInt(), (centerY - 5).toInt(), (centerX + 6).toInt(), (centerY + 5).toInt())
+    } else {
+        graphics.draw(Arc2D.Double(centerX - 4, centerY - 7, 14.0, 14.0, -48.0, 96.0, Arc2D.OPEN))
+        graphics.draw(Arc2D.Double(centerX - 5, centerY - 10, 20.0, 20.0, -43.0, 86.0, Arc2D.OPEN))
+    }
+}
+
+private fun drawFullscreenGlyph(
+    graphics: Graphics2D,
+    centerX: Double,
+    centerY: Double,
+    exit: Boolean,
+) {
+    val outer = 9
+    val inner = 3
+    val cx = centerX.toInt()
+    val cy = centerY.toInt()
+    if (!exit) {
+        graphics.drawLine(cx - outer, cy - inner, cx - outer, cy - outer)
+        graphics.drawLine(cx - outer, cy - outer, cx - inner, cy - outer)
+        graphics.drawLine(cx + inner, cy - outer, cx + outer, cy - outer)
+        graphics.drawLine(cx + outer, cy - outer, cx + outer, cy - inner)
+        graphics.drawLine(cx - outer, cy + inner, cx - outer, cy + outer)
+        graphics.drawLine(cx - outer, cy + outer, cx - inner, cy + outer)
+        graphics.drawLine(cx + inner, cy + outer, cx + outer, cy + outer)
+        graphics.drawLine(cx + outer, cy + outer, cx + outer, cy + inner)
+    } else {
+        graphics.drawLine(cx - outer, cy - inner, cx - inner, cy - inner)
+        graphics.drawLine(cx - inner, cy - inner, cx - inner, cy - outer)
+        graphics.drawLine(cx + outer, cy - inner, cx + inner, cy - inner)
+        graphics.drawLine(cx + inner, cy - inner, cx + inner, cy - outer)
+        graphics.drawLine(cx - outer, cy + inner, cx - inner, cy + inner)
+        graphics.drawLine(cx - inner, cy + inner, cx - inner, cy + outer)
+        graphics.drawLine(cx + outer, cy + inner, cx + inner, cy + inner)
+        graphics.drawLine(cx + inner, cy + inner, cx + inner, cy + outer)
     }
 }
 
@@ -1670,15 +1881,33 @@ private class HoshiraComboBoxUi : BasicComboBoxUI() {
         hasFocus: Boolean,
     ) = Unit
 
-    override fun createArrowButton(): JButton = JButton("⌄").apply {
+    override fun createArrowButton(): JButton = ComboArrowButton().apply {
         preferredSize = Dimension(28, 28)
-        foreground = AWT_MUTED
-        font = hoshiraFont(Font.BOLD, 12f)
         isFocusable = false
+    }
+}
+
+private class ComboArrowButton : JButton() {
+    init {
         isOpaque = false
         isContentAreaFilled = false
         isBorderPainted = false
         margin = java.awt.Insets(0, 0, 0, 0)
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            graphics2D.color = AWT_MUTED
+            graphics2D.stroke = BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            val centerX = width / 2
+            val centerY = height / 2
+            graphics2D.drawLine(centerX - 5, centerY - 2, centerX, centerY + 3)
+            graphics2D.drawLine(centerX, centerY + 3, centerX + 5, centerY - 2)
+        } finally {
+            graphics2D.dispose()
+        }
     }
 }
 
@@ -1783,15 +2012,24 @@ private fun enableHighQualityRendering(graphics: Graphics2D) {
     graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
 }
 
-private val HOSHIRA_FONT: Font by lazy {
+private fun loadHoshiraFont(resource: String, fallbackStyle: Int): Font =
     runCatching {
-        NativeDesktopPlayerPanel::class.java.getResourceAsStream(HOSHIRA_FONT_RESOURCE)
+        NativeDesktopPlayerPanel::class.java.getResourceAsStream(resource)
             ?.use { Font.createFont(Font.TRUETYPE_FONT, it) }
             ?: error("Bundled Hoshira font not found")
-    }.getOrElse { Font(Font.SANS_SERIF, Font.PLAIN, 12) }
+    }.getOrElse { Font(Font.SANS_SERIF, fallbackStyle, 12) }
+
+private val HOSHIRA_MEDIUM_FONT: Font by lazy {
+    loadHoshiraFont(HOSHIRA_MEDIUM_FONT_RESOURCE, Font.PLAIN)
 }
 
-private fun hoshiraFont(style: Int, size: Float): Font = HOSHIRA_FONT.deriveFont(style, size)
+private val HOSHIRA_EXTRABOLD_FONT: Font by lazy {
+    loadHoshiraFont(HOSHIRA_EXTRABOLD_FONT_RESOURCE, Font.BOLD)
+}
+
+private fun hoshiraFont(style: Int, size: Float): Font =
+    (if (style and Font.BOLD != 0) HOSHIRA_EXTRABOLD_FONT else HOSHIRA_MEDIUM_FONT)
+        .deriveFont(Font.PLAIN, size)
 
 private const val SEEK_RANGE = 1_000.0
 private const val CAPTURE_WIDTH = 1_280
@@ -1799,18 +2037,21 @@ private const val CAPTURE_HEIGHT = 720
 private const val FRAME_CAPTURE_INTERVAL_MS = 40.0
 private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
 private const val SLIDER_POINTER_PADDING = 7
-private const val HOSHIRA_FONT_RESOURCE =
-    "/composeResources/dev.aniliberty.desktop.desktopapp.generated.resources/font/montserrat_variable.ttf"
+private const val MAX_TITLE_CHARACTERS = 68
+private const val HOSHIRA_MEDIUM_FONT_RESOURCE =
+    "/composeResources/dev.aniliberty.desktop.desktopapp.generated.resources/font/montserrat_medium.ttf"
+private const val HOSHIRA_EXTRABOLD_FONT_RESOURCE =
+    "/composeResources/dev.aniliberty.desktop.desktopapp.generated.resources/font/montserrat_extrabold.ttf"
 private val AWT_TEXT = AwtColor(0xF7, 0xF7, 0xFA)
 private val AWT_MUTED = AwtColor(0xB9, 0xBA, 0xC5)
 private val AWT_ACCENT = AwtColor(0xFF, 0x6A, 0x00)
 private val AWT_ACCENT_HOVER = AwtColor(0xFF, 0x7D, 0x21)
 private val AWT_ACCENT_PRESSED = AwtColor(0xE8, 0x57, 0x00)
-private val AWT_CONTROL = AwtColor(27, 29, 34, 189)
-private val AWT_CONTROL_HIGH = AwtColor(18, 19, 23, 240)
-private val AWT_CONTROL_HOVER = AwtColor(49, 51, 58, 230)
-private val AWT_CONTROL_PRESSED = AwtColor(0x18, 0x19, 0x1E, 235)
-private val AWT_CONTROL_DISABLED = AwtColor(0x19, 0x1A, 0x1F, 150)
+private val AWT_CONTROL = AwtColor(27, 29, 34)
+private val AWT_CONTROL_HIGH = AwtColor(18, 19, 23)
+private val AWT_CONTROL_HOVER = AwtColor(49, 51, 58)
+private val AWT_CONTROL_PRESSED = AwtColor(0x18, 0x19, 0x1E)
+private val AWT_CONTROL_DISABLED = AwtColor(0x19, 0x1A, 0x1F)
 private val AWT_BORDER = AwtColor(255, 255, 255, 35)
 private val AWT_BORDER_HOVER = AwtColor(0x5B, 0x5D, 0x69)
 private val AWT_SLIDER_TRACK = AwtColor(255, 255, 255, 55)

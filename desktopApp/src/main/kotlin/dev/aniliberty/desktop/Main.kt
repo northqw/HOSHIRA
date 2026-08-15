@@ -87,17 +87,12 @@ fun main() {
                     return@updateFullscreen
                 }
 
-                val handledByPlatform = setHoshiraWindowFullscreen(
-                    window = window,
-                    fullscreen = requestedFullscreen,
-                )
-                if (!handledByPlatform && requestedFullscreen) {
+                if (requestedFullscreen) {
                     if (windowState.placement != WindowPlacement.Fullscreen) {
                         placementBeforeFullscreen = windowState.placement
                         windowState.placement = WindowPlacement.Fullscreen
                     }
                 } else if (
-                    !handledByPlatform &&
                     windowState.placement == WindowPlacement.Fullscreen
                 ) {
                     windowState.placement = placementBeforeFullscreen
