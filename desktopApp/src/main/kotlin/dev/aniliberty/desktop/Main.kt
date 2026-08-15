@@ -29,6 +29,8 @@ import java.awt.event.KeyEvent
 import kotlinx.coroutines.delay
 
 fun main() {
+    System.setProperty("awt.useSystemAAFontSettings", "lcd")
+    System.setProperty("swing.aatext", "true")
     // AWT otherwise clears a newly attached heavyweight Canvas with the
     // platform window color before its first paint. On Windows that produces
     // a single white frame between the Compose loader and native media surface.

@@ -7,12 +7,14 @@ import java.awt.Color as AwtColor
 import java.awt.Dimension
 import java.awt.EventQueue
 import java.awt.Font
+import java.awt.GradientPaint
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
 import java.awt.event.MouseMotionAdapter
 import java.awt.geom.RoundRectangle2D
 import java.awt.image.BufferedImage
@@ -59,15 +61,18 @@ import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
+import javax.swing.JLayeredPane
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JSlider
 import javax.swing.KeyStroke
 import javax.swing.SwingConstants
+import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicComboBoxUI
 import javax.swing.plaf.basic.BasicSliderUI
 import kotlin.concurrent.thread
 import kotlin.math.roundToLong
+import kotlin.math.roundToInt
 
 /**
  * Windows HLS player. JavaFX Media decodes the adaptive stream directly; no
@@ -195,7 +200,10 @@ internal class NativeDesktopPlayerPanel(
     }
 
     override fun removeNotify() {
-        disposePlayer()
+        // Compose temporarily detaches SwingPanel while moving the window in and
+        // out of fullscreen. The player belongs to PlayerScreen's lifecycle, so
+        // detaching the peer must not destroy the decoder or the current frame.
+        debugSession.record("Swing surface detached; preserving player for reattach")
         super.removeNotify()
     }
 
@@ -253,7 +261,7 @@ internal class NativeDesktopPlayerPanel(
         }
     }
 
-    private fun createAwtPlayerHost(): JPanel {
+    private fun createAwtPlayerHost(): JComponent {
         val heading = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
@@ -262,11 +270,11 @@ internal class NativeDesktopPlayerPanel(
         }
         awtTitleLabel.apply {
             foreground = AWT_TEXT
-            font = Font(Font.SANS_SERIF, Font.BOLD, 17)
+            font = hoshiraFont(Font.BOLD, 17f)
         }
         awtSubtitleLabel.apply {
             foreground = AWT_MUTED
-            font = Font(Font.SANS_SERIF, Font.PLAIN, 12)
+            font = hoshiraFont(Font.PLAIN, 12f)
         }
         awtSourceSelector.apply {
             preferredSize = Dimension(145, 34)
@@ -274,7 +282,7 @@ internal class NativeDesktopPlayerPanel(
             background = AWT_CONTROL_HIGH
             foreground = AWT_TEXT
             isFocusable = false
-            font = Font(Font.SANS_SERIF, Font.BOLD, 12)
+            font = hoshiraFont(Font.BOLD, 12f)
             border = BorderFactory.createEmptyBorder(0, 10, 0, 8)
             ui = HoshiraComboBoxUi()
             renderer = HoshiraComboRenderer()
@@ -294,13 +302,9 @@ internal class NativeDesktopPlayerPanel(
             emitAction(EmbeddedPlayerAction.SetFullscreen(!fullscreen))
         }
         awtFullscreenButton.toolTipText = "Полный экран (F)"
-        val upper = JPanel().apply {
+        val upper = GlassPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
-            background = AWT_BAR
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, AWT_BORDER),
-                BorderFactory.createEmptyBorder(12, 18, 12, 18),
-            )
+            border = BorderFactory.createEmptyBorder(12, 16, 12, 16)
             add(awtBackButton)
             add(Box.createHorizontalStrut(14))
             add(heading)
@@ -328,9 +332,9 @@ internal class NativeDesktopPlayerPanel(
         awtNextButton.toolTipText = "Следующая серия"
         awtElapsedLabel.apply {
             foreground = AWT_TEXT
-            font = Font(Font.MONOSPACED, Font.BOLD, 12)
+            font = hoshiraFont(Font.BOLD, 12f)
             horizontalAlignment = SwingConstants.CENTER
-            preferredSize = Dimension(132, 34)
+            preferredSize = Dimension(136, 34)
         }
         awtSeekSlider.apply {
             isOpaque = false
@@ -352,6 +356,22 @@ internal class NativeDesktopPlayerPanel(
                     }
                 }
             }
+            addMouseListener(
+                object : MouseAdapter() {
+                    override fun mousePressed(event: java.awt.event.MouseEvent) {
+                        if (!SwingUtilities.isLeftMouseButton(event)) return
+                        awtSeeking = true
+                        setSliderValueAtPointer(this@apply, event.x)
+                    }
+
+                    override fun mouseReleased(event: java.awt.event.MouseEvent) {
+                        if (!SwingUtilities.isLeftMouseButton(event)) return
+                        setSliderValueAtPointer(this@apply, event.x)
+                        awtSeeking = false
+                        seekToAwtSliderPosition()
+                    }
+                },
+            )
         }
         awtVolumeSlider.apply {
             isOpaque = false
@@ -367,12 +387,12 @@ internal class NativeDesktopPlayerPanel(
             }
         }
         awtQualitySelector.apply {
-            preferredSize = Dimension(92, 32)
-            maximumSize = Dimension(110, 32)
+            preferredSize = Dimension(112, 34)
+            maximumSize = Dimension(132, 34)
             background = AWT_CONTROL_HIGH
             foreground = AWT_ACCENT
             isFocusable = false
-            font = Font(Font.SANS_SERIF, Font.BOLD, 12)
+            font = hoshiraFont(Font.BOLD, 12f)
             border = BorderFactory.createEmptyBorder(0, 8, 0, 6)
             ui = HoshiraComboBoxUi()
             renderer = HoshiraComboRenderer(accent = true)
@@ -396,32 +416,51 @@ internal class NativeDesktopPlayerPanel(
             add(Box.createHorizontalStrut(16))
             add(JLabel("VOL").apply {
                 foreground = AWT_MUTED
-                font = Font(Font.SANS_SERIF, Font.BOLD, 10)
+                font = hoshiraFont(Font.BOLD, 10f)
             })
             add(Box.createHorizontalStrut(5))
             add(awtVolumeSlider)
         }
-        val lower = JPanel(BorderLayout(0, 7)).apply {
-            background = AWT_BAR
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 0, 0, AWT_BORDER),
-                BorderFactory.createEmptyBorder(10, 18, 14, 18),
-            )
+        val lower = GlassPanel(radius = 22).apply {
+            layout = BorderLayout(0, 7)
+            border = BorderFactory.createEmptyBorder(12, 16, 14, 16)
             add(awtSeekSlider, BorderLayout.NORTH)
             add(playbackRow, BorderLayout.CENTER)
         }
-        return JPanel(BorderLayout()).apply {
-            background = AwtColor.BLACK
+        val overlay = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(18, 22, 20, 22)
             add(upper, BorderLayout.NORTH)
-            add(videoSurface, BorderLayout.CENTER)
             add(lower, BorderLayout.SOUTH)
+        }
+        return PlayerLayeredPane(videoSurface, overlay)
+    }
+
+    private fun setSliderValueAtPointer(slider: JSlider, pointerX: Int) {
+        val usableWidth = (slider.width - SLIDER_POINTER_PADDING * 2).coerceAtLeast(1)
+        val fraction = ((pointerX - SLIDER_POINTER_PADDING).toDouble() / usableWidth)
+            .coerceIn(0.0, 1.0)
+        slider.value = (
+            slider.minimum + fraction * (slider.maximum - slider.minimum)
+        ).roundToInt()
+    }
+
+    private fun seekToAwtSliderPosition() {
+        val value = awtSeekSlider.value
+        Platform.runLater {
+            val player = mediaPlayer ?: return@runLater
+            val duration = player.totalDuration.safeSeconds()
+            if (duration > 0.0) {
+                player.seek(Duration.seconds(duration * value / SEEK_RANGE))
+                emitPlayback()
+            }
         }
     }
 
     private fun styleAwtButton(button: JButton, action: () -> Unit) {
         button.apply {
             foreground = AWT_TEXT
-            font = Font(Font.SANS_SERIF, Font.BOLD, 15)
+            font = hoshiraFont(Font.BOLD, 15f)
             isFocusPainted = false
             preferredSize = Dimension(42, 36)
             maximumSize = Dimension(46, 38)
@@ -1320,6 +1359,60 @@ internal class NativeDesktopPlayerPanel(
     }
 }
 
+private class PlayerLayeredPane(
+    private val video: JComponent,
+    private val overlay: JComponent,
+) : JLayeredPane() {
+    init {
+        isOpaque = true
+        background = AwtColor.BLACK
+        add(video, Integer.valueOf(DEFAULT_LAYER))
+        add(overlay, Integer.valueOf(PALETTE_LAYER))
+    }
+
+    override fun doLayout() {
+        video.setBounds(0, 0, width, height)
+        overlay.setBounds(0, 0, width, height)
+    }
+}
+
+private class GlassPanel(
+    private val radius: Int = 20,
+) : JPanel() {
+    init {
+        isOpaque = false
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            val panelWidth = (width - 8).coerceAtLeast(1)
+            val panelHeight = (height - 9).coerceAtLeast(1)
+            graphics2D.color = AwtColor(0, 0, 0, 34)
+            graphics2D.fillRoundRect(4, 6, panelWidth, panelHeight, radius + 4, radius + 4)
+            graphics2D.color = AwtColor(0, 0, 0, 58)
+            graphics2D.fillRoundRect(3, 4, panelWidth + 1, panelHeight, radius + 2, radius + 2)
+            graphics2D.paint = GradientPaint(
+                0f,
+                2f,
+                AwtColor(31, 32, 41, 228),
+                0f,
+                height.toFloat(),
+                AwtColor(12, 13, 18, 218),
+            )
+            graphics2D.fillRoundRect(2, 1, panelWidth + 2, panelHeight, radius, radius)
+            graphics2D.color = AwtColor(255, 255, 255, 29)
+            graphics2D.drawRoundRect(2, 1, panelWidth + 1, panelHeight - 1, radius, radius)
+            graphics2D.color = AwtColor(255, 255, 255, 13)
+            graphics2D.drawLine(radius / 2 + 5, 2, width - radius / 2 - 7, 2)
+        } finally {
+            graphics2D.dispose()
+        }
+        super.paintComponent(graphics)
+    }
+}
+
 private class AwtVideoSurface : JPanel() {
     @Volatile
     var frame: BufferedImage? = null
@@ -1337,6 +1430,7 @@ private class AwtVideoSurface : JPanel() {
         super.paintComponent(graphics)
         val graphics2D = graphics.create() as Graphics2D
         try {
+            enableHighQualityRendering(graphics2D)
             graphics2D.color = AwtColor.BLACK
             graphics2D.fillRect(0, 0, width, height)
             frame?.let { image ->
@@ -1364,7 +1458,7 @@ private class AwtVideoSurface : JPanel() {
             if (frame == null) {
                 status?.let { message ->
                     graphics2D.color = AWT_MUTED
-                    graphics2D.font = Font(Font.SANS_SERIF, Font.BOLD, 15)
+                    graphics2D.font = hoshiraFont(Font.BOLD, 15f)
                     val metrics = graphics2D.fontMetrics
                     val textX = ((width - metrics.stringWidth(message)) / 2).coerceAtLeast(16)
                     val textY = (height + metrics.ascent) / 2
@@ -1392,23 +1486,48 @@ private class HoshiraPlayerButton(
     override fun paintComponent(graphics: Graphics) {
         val graphics2D = graphics.create() as Graphics2D
         try {
-            graphics2D.setRenderingHint(
-                RenderingHints.KEY_ANTIALIASING,
-                RenderingHints.VALUE_ANTIALIAS_ON,
-            )
-            graphics2D.color = when {
+            enableHighQualityRendering(graphics2D)
+            val fill = when {
                 !isEnabled -> AWT_CONTROL_DISABLED
                 model.isPressed -> if (accent) AWT_ACCENT_PRESSED else AWT_CONTROL_PRESSED
                 model.isRollover -> if (accent) AWT_ACCENT_HOVER else AWT_CONTROL_HOVER
                 accent -> AWT_ACCENT
                 else -> AWT_CONTROL
             }
+            graphics2D.color = AwtColor(0, 0, 0, if (accent) 82 else 48)
+            graphics2D.fillRoundRect(
+                2,
+                4,
+                (width - 4).coerceAtLeast(1),
+                (height - 6).coerceAtLeast(1),
+                15,
+                15,
+            )
+            graphics2D.paint = if (accent) {
+                GradientPaint(
+                    0f,
+                    1f,
+                    fill.brighter(),
+                    0f,
+                    height.toFloat(),
+                    fill,
+                )
+            } else {
+                GradientPaint(
+                    0f,
+                    1f,
+                    AwtColor(fill.red + 8, fill.green + 8, fill.blue + 9, fill.alpha),
+                    0f,
+                    height.toFloat(),
+                    fill,
+                )
+            }
             graphics2D.fill(
                 RoundRectangle2D.Double(
                     1.0,
                     1.0,
                     (width - 2).coerceAtLeast(1).toDouble(),
-                    (height - 2).coerceAtLeast(1).toDouble(),
+                    (height - 4).coerceAtLeast(1).toDouble(),
                     14.0,
                     14.0,
                 ),
@@ -1420,7 +1539,7 @@ private class HoshiraPlayerButton(
                         1.5,
                         1.5,
                         (width - 3).coerceAtLeast(1).toDouble(),
-                        (height - 3).coerceAtLeast(1).toDouble(),
+                        (height - 5).coerceAtLeast(1).toDouble(),
                         13.0,
                         13.0,
                     ),
@@ -1437,7 +1556,7 @@ private class HoshiraComboBoxUi : BasicComboBoxUI() {
     override fun createArrowButton(): JButton = HoshiraPlayerButton("⌄").apply {
         preferredSize = Dimension(28, 28)
         foreground = AWT_MUTED
-        font = Font(Font.SANS_SERIF, Font.BOLD, 12)
+        font = hoshiraFont(Font.BOLD, 12f)
         isFocusable = false
     }
 }
@@ -1461,7 +1580,7 @@ private class HoshiraComboRenderer(
         ) as JLabel
         label.background = if (isSelected) AWT_CONTROL_HOVER else AWT_CONTROL_HIGH
         label.foreground = if (accent && index < 0) AWT_ACCENT else AWT_TEXT
-        label.font = Font(Font.SANS_SERIF, Font.BOLD, 12)
+        label.font = hoshiraFont(Font.BOLD, 12f)
         label.border = BorderFactory.createEmptyBorder(7, 10, 7, 10)
         return label
     }
@@ -1475,10 +1594,7 @@ private class HoshiraSliderUi(slider: JSlider) : BasicSliderUI(slider) {
     override fun paintTrack(graphics: Graphics) {
         val graphics2D = graphics.create() as Graphics2D
         try {
-            graphics2D.setRenderingHint(
-                RenderingHints.KEY_ANTIALIASING,
-                RenderingHints.VALUE_ANTIALIAS_ON,
-            )
+            enableHighQualityRendering(graphics2D)
             val y = trackRect.y + (trackRect.height - 4) / 2
             graphics2D.color = AWT_SLIDER_TRACK
             graphics2D.fillRoundRect(trackRect.x, y, trackRect.width, 4, 4, 4)
@@ -1495,9 +1611,13 @@ private class HoshiraSliderUi(slider: JSlider) : BasicSliderUI(slider) {
     override fun paintThumb(graphics: Graphics) {
         val graphics2D = graphics.create() as Graphics2D
         try {
-            graphics2D.setRenderingHint(
-                RenderingHints.KEY_ANTIALIASING,
-                RenderingHints.VALUE_ANTIALIAS_ON,
+            enableHighQualityRendering(graphics2D)
+            graphics2D.color = AwtColor(0, 0, 0, 90)
+            graphics2D.fillOval(
+                thumbRect.x - 2,
+                thumbRect.y + 2,
+                thumbRect.width + 4,
+                thumbRect.height + 4,
             )
             graphics2D.color = AWT_ACCENT
             graphics2D.fillOval(thumbRect.x, thumbRect.y, thumbRect.width, thumbRect.height)
@@ -1530,25 +1650,44 @@ private fun Double.clockText(): String {
     }
 }
 
+private fun enableHighQualityRendering(graphics: Graphics2D) {
+    graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+    graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB)
+    graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+    graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+}
+
+private val HOSHIRA_FONT: Font by lazy {
+    runCatching {
+        NativeDesktopPlayerPanel::class.java.getResourceAsStream(HOSHIRA_FONT_RESOURCE)
+            ?.use { Font.createFont(Font.TRUETYPE_FONT, it) }
+            ?: error("Bundled Hoshira font not found")
+    }.getOrElse { Font(Font.SANS_SERIF, Font.PLAIN, 12) }
+}
+
+private fun hoshiraFont(style: Int, size: Float): Font = HOSHIRA_FONT.deriveFont(style, size)
+
 private const val SEEK_RANGE = 1_000.0
 private const val CAPTURE_WIDTH = 1_280
 private const val CAPTURE_HEIGHT = 720
 private const val FRAME_CAPTURE_INTERVAL_MS = 40.0
 private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
+private const val SLIDER_POINTER_PADDING = 7
+private const val HOSHIRA_FONT_RESOURCE =
+    "/composeResources/dev.aniliberty.desktop.desktopapp.generated.resources/font/montserrat_variable.ttf"
 private val AWT_TEXT = AwtColor(0xF7, 0xF7, 0xFA)
 private val AWT_MUTED = AwtColor(0xB9, 0xBA, 0xC5)
 private val AWT_ACCENT = AwtColor(0xFF, 0x6A, 0x00)
 private val AWT_ACCENT_HOVER = AwtColor(0xFF, 0x7D, 0x21)
 private val AWT_ACCENT_PRESSED = AwtColor(0xE8, 0x57, 0x00)
-private val AWT_CONTROL = AwtColor(0x20, 0x21, 0x27)
-private val AWT_CONTROL_HIGH = AwtColor(0x27, 0x28, 0x30)
-private val AWT_CONTROL_HOVER = AwtColor(0x34, 0x35, 0x3E)
-private val AWT_CONTROL_PRESSED = AwtColor(0x18, 0x19, 0x1E)
-private val AWT_CONTROL_DISABLED = AwtColor(0x19, 0x1A, 0x1F)
-private val AWT_BORDER = AwtColor(0x3A, 0x3B, 0x44)
+private val AWT_CONTROL = AwtColor(0x24, 0x25, 0x2D, 215)
+private val AWT_CONTROL_HIGH = AwtColor(0x2A, 0x2B, 0x34, 235)
+private val AWT_CONTROL_HOVER = AwtColor(0x3B, 0x3D, 0x48, 235)
+private val AWT_CONTROL_PRESSED = AwtColor(0x18, 0x19, 0x1E, 235)
+private val AWT_CONTROL_DISABLED = AwtColor(0x19, 0x1A, 0x1F, 150)
+private val AWT_BORDER = AwtColor(255, 255, 255, 35)
 private val AWT_BORDER_HOVER = AwtColor(0x5B, 0x5D, 0x69)
-private val AWT_SLIDER_TRACK = AwtColor(0x43, 0x44, 0x4E)
-private val AWT_BAR = AwtColor(0x11, 0x12, 0x16)
+private val AWT_SLIDER_TRACK = AwtColor(255, 255, 255, 55)
 private const val LABEL_STYLE =
     "-fx-text-fill: #f7f7fa; -fx-font-size: 13px; -fx-font-weight: 700;"
 private const val MUTED_LABEL_STYLE =
