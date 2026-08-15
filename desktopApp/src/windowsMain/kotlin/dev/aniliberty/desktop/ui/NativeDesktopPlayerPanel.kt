@@ -61,7 +61,6 @@ import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
-import javax.swing.JLayeredPane
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JSlider
@@ -433,7 +432,12 @@ internal class NativeDesktopPlayerPanel(
             add(upper, BorderLayout.NORTH)
             add(lower, BorderLayout.SOUTH)
         }
-        return PlayerLayeredPane(videoSurface, overlay)
+        // Keep the controls as children of the painted video surface. Swing
+        // always invokes paintChildren after paintComponent, so every captured
+        // video frame is guaranteed to stay behind the glass overlay.
+        videoSurface.layout = BorderLayout()
+        videoSurface.add(overlay, BorderLayout.CENTER)
+        return videoSurface
     }
 
     private fun setSliderValueAtPointer(slider: JSlider, pointerX: Int) {
@@ -1356,23 +1360,6 @@ internal class NativeDesktopPlayerPanel(
             revalidate()
             repaint()
         }
-    }
-}
-
-private class PlayerLayeredPane(
-    private val video: JComponent,
-    private val overlay: JComponent,
-) : JLayeredPane() {
-    init {
-        isOpaque = true
-        background = AwtColor.BLACK
-        add(video, Integer.valueOf(DEFAULT_LAYER))
-        add(overlay, Integer.valueOf(PALETTE_LAYER))
-    }
-
-    override fun doLayout() {
-        video.setBounds(0, 0, width, height)
-        overlay.setBounds(0, 0, width, height)
     }
 }
 
