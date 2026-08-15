@@ -56,6 +56,7 @@ import javafx.scene.media.Media
 import javafx.scene.media.MediaPlayer
 import javafx.scene.media.MediaView
 import javafx.scene.paint.Color
+import javafx.scene.transform.Transform
 import javafx.util.Duration
 import javax.swing.BorderFactory
 import javax.swing.AbstractAction
@@ -141,6 +142,8 @@ internal class NativeDesktopPlayerPanel(
     private var frameCaptureTimer: Timeline? = null
     private var snapshotImage: WritableImage? = null
     private var snapshotBuffers: Array<BufferedImage>? = null
+    private var snapshotWidth = CAPTURE_WIDTH
+    private var snapshotHeight = CAPTURE_HEIGHT
     private var snapshotWriteIndex = 0
     private var firstFrameLogged = false
     private var seeking = false
@@ -306,8 +309,8 @@ internal class NativeDesktopPlayerPanel(
             font = hoshiraFont(Font.PLAIN, 14f)
         }
         awtSourceSelector.apply {
-            preferredSize = Dimension(192, 46)
-            maximumSize = Dimension(224, 46)
+            preferredSize = Dimension(244, 46)
+            maximumSize = Dimension(300, 46)
             isOpaque = false
             foreground = AWT_TEXT
             isFocusable = false
@@ -341,8 +344,8 @@ internal class NativeDesktopPlayerPanel(
             toolTipText = "Полный экран (F)"
         }
         val sourcePill = PillControlPanel().apply {
-            preferredSize = Dimension(196, 48)
-            maximumSize = Dimension(228, 48)
+            preferredSize = Dimension(248, 48)
+            maximumSize = Dimension(304, 48)
             add(awtSourceSelector, BorderLayout.CENTER)
         }
         val upper = JPanel().apply {
@@ -458,8 +461,8 @@ internal class NativeDesktopPlayerPanel(
             }
         }
         awtQualitySelector.apply {
-            preferredSize = Dimension(90, 46)
-            maximumSize = Dimension(112, 46)
+            preferredSize = Dimension(112, 46)
+            maximumSize = Dimension(132, 46)
             isOpaque = false
             foreground = AWT_TEXT
             isFocusable = false
@@ -473,8 +476,8 @@ internal class NativeDesktopPlayerPanel(
             }
         }
         val qualityPill = PillControlPanel().apply {
-            preferredSize = Dimension(94, 48)
-            maximumSize = Dimension(116, 48)
+            preferredSize = Dimension(116, 48)
+            maximumSize = Dimension(136, 48)
             add(awtQualitySelector, BorderLayout.CENTER)
         }
         val leftControls = JPanel().apply {
@@ -522,6 +525,15 @@ internal class NativeDesktopPlayerPanel(
             layout = BorderLayout()
             add(upper, BorderLayout.NORTH)
             add(lower, BorderLayout.SOUTH)
+            addMouseListener(
+                object : MouseAdapter() {
+                    override fun mouseClicked(event: java.awt.event.MouseEvent) {
+                        if (SwingUtilities.isLeftMouseButton(event)) {
+                            Platform.runLater { togglePlayback() }
+                        }
+                    }
+                },
+            )
         }
         // Keep the controls as children of the painted video surface. Swing
         // always invokes paintChildren after paintComponent, so every captured
@@ -1045,22 +1057,26 @@ internal class NativeDesktopPlayerPanel(
             }
             player.onPlaying = Runnable {
                 debugSession.record("JavaFX playing")
+                frameCaptureTimer?.play()
                 playButton?.text = "❚❚"
                 EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Pause }
                 scheduleControlsHide()
             }
             player.onPaused = Runnable {
+                frameCaptureTimer?.pause()
                 playButton?.text = "▶"
                 EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Play }
                 showControls(permanent = true)
                 emitPlayback()
             }
             player.onStopped = Runnable {
+                frameCaptureTimer?.pause()
                 playButton?.text = "▶"
                 EventQueue.invokeLater { awtPlayButton.glyph = PlayerGlyph.Play }
                 emitPlayback()
             }
             player.onEndOfMedia = Runnable {
+                frameCaptureTimer?.pause()
                 emitPlayback()
                 if (requestedChrome.autoplayNext && requestedChrome.hasNext) {
                     emitAction(EmbeddedPlayerAction.Next)
@@ -1099,11 +1115,20 @@ internal class NativeDesktopPlayerPanel(
     private fun startFrameCapture() {
         val video = mediaView ?: return
         frameCaptureTimer?.stop()
-        snapshotImage = WritableImage(CAPTURE_WIDTH, CAPTURE_HEIGHT)
+        val surfaceWidth = videoSurface.width.coerceAtLeast(MIN_CAPTURE_WIDTH)
+        val surfaceHeight = videoSurface.height.coerceAtLeast(MIN_CAPTURE_HEIGHT)
+        val boundedDisplayWidth = minOf(surfaceWidth, surfaceHeight * 16 / 9)
+        snapshotWidth = minOf(CAPTURE_OPTIMAL_WIDTH, boundedDisplayWidth)
+            .coerceAtLeast(MIN_CAPTURE_WIDTH)
+            .let { it - it % 2 }
+        snapshotHeight = (snapshotWidth * 9 / 16)
+            .coerceAtLeast(MIN_CAPTURE_HEIGHT)
+            .let { it - it % 2 }
+        snapshotImage = WritableImage(snapshotWidth, snapshotHeight)
         snapshotBuffers = Array(2) {
             BufferedImage(
-                CAPTURE_WIDTH,
-                CAPTURE_HEIGHT,
+                snapshotWidth,
+                snapshotHeight,
                 BufferedImage.TYPE_INT_ARGB_PRE,
             )
         }
@@ -1111,6 +1136,10 @@ internal class NativeDesktopPlayerPanel(
         firstFrameLogged = false
         val parameters = SnapshotParameters().apply {
             fill = Color.BLACK
+            transform = Transform.scale(
+                snapshotWidth.toDouble() / CAPTURE_WIDTH,
+                snapshotHeight.toDouble() / CAPTURE_HEIGHT,
+            )
         }
         frameCaptureTimer = Timeline(
             KeyFrame(
@@ -1122,8 +1151,8 @@ internal class NativeDesktopPlayerPanel(
             play()
         }
         debugSession.record(
-            "Swing frame capture started ${CAPTURE_WIDTH}x$CAPTURE_HEIGHT " +
-                "interval=${FRAME_CAPTURE_INTERVAL_MS.toInt()}ms",
+            "Swing frame capture started ${snapshotWidth}x$snapshotHeight " +
+                "interval=${"%.2f".format(FRAME_CAPTURE_INTERVAL_MS)}ms",
         )
     }
 
@@ -1141,12 +1170,12 @@ internal class NativeDesktopPlayerPanel(
             image.pixelReader.getPixels(
                 0,
                 0,
-                CAPTURE_WIDTH,
-                CAPTURE_HEIGHT,
+                snapshotWidth,
+                snapshotHeight,
                 PixelFormat.getIntArgbPreInstance(),
                 pixels,
                 0,
-                CAPTURE_WIDTH,
+                snapshotWidth,
             )
             videoSurface.frame = target
             snapshotWriteIndex = (snapshotWriteIndex + 1) % buffers.size
@@ -1154,9 +1183,7 @@ internal class NativeDesktopPlayerPanel(
                 firstFrameLogged = true
                 debugSession.record("Swing first video frame captured")
             }
-            EventQueue.invokeLater {
-                if (!disposed.get()) videoSurface.repaint()
-            }
+            if (!disposed.get()) videoSurface.repaint()
         } catch (error: Throwable) {
             frameCaptureTimer?.stop()
             debugSession.record(
@@ -1232,11 +1259,16 @@ internal class NativeDesktopPlayerPanel(
             awtQualityUpdate = true
             try {
                 awtQualitySelector.removeAllItems()
-                val options = availableQualities.ifEmpty { listOfNotNull(current) }
+                val options = availableQualities.ifEmpty {
+                    listOf(current ?: selectedQualityOverride ?: "Авто")
+                }
                 options.forEach(awtQualitySelector::addItem)
                 awtQualitySelector.selectedItem = current
+                    ?.takeIf(options::contains)
+                    ?: selectedQualityOverride?.takeIf(options::contains)
+                    ?: options.first()
                 awtQualitySelector.isEnabled = options.size > 1
-                awtQualitySelector.isVisible = options.isNotEmpty()
+                awtQualitySelector.isVisible = true
             } finally {
                 awtQualityUpdate = false
             }
@@ -1791,29 +1823,30 @@ private fun drawTenSecondGlyph(
     centerY: Double,
     forward: Boolean,
 ) {
-    val start = if (forward) 230.0 else -50.0
-    val extent = if (forward) -275.0 else 275.0
+    graphics.stroke = BasicStroke(2.35f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+    val start = if (forward) 305.0 else -125.0
+    val extent = if (forward) -260.0 else 260.0
     graphics.draw(Arc2D.Double(centerX - 9, centerY - 9, 18.0, 18.0, start, extent, Arc2D.OPEN))
     val arrow = Path2D.Double().apply {
         if (forward) {
-            moveTo(centerX + 7, centerY - 8)
-            lineTo(centerX + 10, centerY - 3)
-            lineTo(centerX + 4, centerY - 3)
+            moveTo(centerX + 6.5, centerY - 8.5)
+            lineTo(centerX + 10.5, centerY - 4.0)
+            lineTo(centerX + 4.0, centerY - 3.5)
         } else {
-            moveTo(centerX - 7, centerY - 8)
-            lineTo(centerX - 10, centerY - 3)
-            lineTo(centerX - 4, centerY - 3)
+            moveTo(centerX - 6.5, centerY - 8.5)
+            lineTo(centerX - 10.5, centerY - 4.0)
+            lineTo(centerX - 4.0, centerY - 3.5)
         }
         closePath()
     }
     graphics.fill(arrow)
-    graphics.font = hoshiraFont(Font.BOLD, 7.5f)
+    graphics.font = hoshiraFont(Font.BOLD, 8.5f)
     val text = "10"
     val metrics = graphics.fontMetrics
     graphics.drawString(
         text,
         (centerX - metrics.stringWidth(text) / 2.0).toFloat(),
-        (centerY + metrics.ascent / 2.0 - 1).toFloat(),
+        (centerY + metrics.ascent / 2.0).toFloat(),
     )
 }
 
@@ -1932,7 +1965,11 @@ private class HoshiraComboRenderer(
         label.background = if (isSelected) AWT_CONTROL_HOVER else AWT_CONTROL_HIGH
         label.foreground = if (accent && index < 0) AWT_ACCENT else AWT_TEXT
         label.font = hoshiraFont(Font.BOLD, 12f)
-        label.border = BorderFactory.createEmptyBorder(7, 10, 7, 10)
+        label.border = if (index < 0) {
+            BorderFactory.createEmptyBorder()
+        } else {
+            BorderFactory.createEmptyBorder(7, 10, 7, 10)
+        }
         label.isOpaque = index >= 0
         if (index < 0 && !prefix.isNullOrBlank()) {
             label.text = "$prefix   ${value?.toString().orEmpty()}"
@@ -2034,7 +2071,10 @@ private fun hoshiraFont(style: Int, size: Float): Font =
 private const val SEEK_RANGE = 1_000.0
 private const val CAPTURE_WIDTH = 1_280
 private const val CAPTURE_HEIGHT = 720
-private const val FRAME_CAPTURE_INTERVAL_MS = 40.0
+private const val CAPTURE_OPTIMAL_WIDTH = 1_152
+private const val MIN_CAPTURE_WIDTH = 640
+private const val MIN_CAPTURE_HEIGHT = 360
+private const val FRAME_CAPTURE_INTERVAL_MS = 1_000.0 / 23.976
 private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
 private const val SLIDER_POINTER_PADDING = 7
 private const val MAX_TITLE_CHARACTERS = 68

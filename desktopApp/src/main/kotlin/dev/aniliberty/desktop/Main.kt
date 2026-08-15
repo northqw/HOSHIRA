@@ -92,9 +92,11 @@ fun main() {
                         placementBeforeFullscreen = windowState.placement
                         windowState.placement = WindowPlacement.Fullscreen
                     }
-                } else if (
-                    windowState.placement == WindowPlacement.Fullscreen
-                ) {
+                } else {
+                    // Compose can report the native fullscreen transition one
+                    // frame later than our state callback. Always restore the
+                    // remembered placement instead of depending on that lagging
+                    // value, otherwise Escape/the exit button becomes a no-op.
                     windowState.placement = placementBeforeFullscreen
                 }
                 isFullscreen = requestedFullscreen
