@@ -9,6 +9,7 @@ import java.awt.EventQueue
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.GraphicsEnvironment
 import java.awt.LinearGradientPaint
 import java.awt.RenderingHints
 import java.awt.BasicStroke
@@ -70,11 +71,16 @@ import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JSlider
+import javax.swing.JWindow
 import javax.swing.KeyStroke
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.event.PopupMenuEvent
+import javax.swing.event.PopupMenuListener
 import javax.swing.plaf.basic.BasicComboBoxUI
+import javax.swing.plaf.basic.BasicComboPopup
 import javax.swing.plaf.basic.BasicSliderUI
+import javax.swing.plaf.basic.ComboPopup
 import kotlin.concurrent.thread
 import kotlin.math.roundToLong
 import kotlin.math.roundToInt
@@ -115,6 +121,8 @@ internal class NativeDesktopPlayerPanel(
 
     @Volatile
     private var fullscreen = false
+
+    private var fullscreenWindow: JWindow? = null
 
     private var activeRequestUrl: String? = null
     private var activeQuality: String? = null
@@ -264,6 +272,11 @@ internal class NativeDesktopPlayerPanel(
     fun setFullscreenState(fullscreen: Boolean) {
         this.fullscreen = fullscreen
         EventQueue.invokeLater {
+            if (fullscreen) {
+                enterNativeFullscreen()
+            } else {
+                exitNativeFullscreen()
+            }
             awtFullscreenButton.glyph =
                 if (fullscreen) PlayerGlyph.ExitFullscreen else PlayerGlyph.Fullscreen
         }
@@ -278,6 +291,7 @@ internal class NativeDesktopPlayerPanel(
         val oldActionCallback = actionCallback
         actionCallback = {}
         stateCallback = {}
+        EventQueue.invokeLater { exitNativeFullscreen() }
         Platform.runLater {
             emitPlayback(oldActionCallback)
             controlsTimer?.stop()
@@ -290,6 +304,57 @@ internal class NativeDesktopPlayerPanel(
             mediaView?.mediaPlayer = null
             fxPanel.scene = null
         }
+    }
+
+    private fun enterNativeFullscreen() {
+        if (disposed.get() || fullscreenWindow != null) return
+        val owner = SwingUtilities.getWindowAncestor(this)
+        val screenBounds = owner?.graphicsConfiguration?.bounds
+            ?: GraphicsEnvironment
+                .getLocalGraphicsEnvironment()
+                .defaultScreenDevice
+                .defaultConfiguration
+                .bounds
+        remove(videoSurface)
+        revalidate()
+        repaint()
+        val host = JWindow(owner).apply {
+            background = AwtColor.BLACK
+            contentPane.background = AwtColor.BLACK
+            contentPane.layout = BorderLayout()
+            contentPane.add(videoSurface, BorderLayout.CENTER)
+            bounds = screenBounds
+            focusableWindowState = true
+        }
+        fullscreenWindow = host
+        host.validate()
+        host.isVisible = true
+        host.toFront()
+        host.requestFocus()
+        videoSurface.requestFocusInWindow()
+        debugSession.record(
+            "native fullscreen entered bounds=${screenBounds.width}x${screenBounds.height}",
+        )
+        requestSurfaceRepaint()
+    }
+
+    private fun exitNativeFullscreen() {
+        val host = fullscreenWindow ?: return
+        fullscreenWindow = null
+        host.contentPane.remove(videoSurface)
+        host.isVisible = false
+        host.dispose()
+        if (videoSurface.parent !== this) {
+            add(videoSurface, BorderLayout.CENTER)
+        }
+        revalidate()
+        repaint()
+        SwingUtilities.getWindowAncestor(this)?.apply {
+            toFront()
+            requestFocus()
+        }
+        debugSession.record("native fullscreen exited")
+        requestSurfaceRepaint()
     }
 
     private fun createAwtPlayerHost(): JComponent {
@@ -315,7 +380,8 @@ internal class NativeDesktopPlayerPanel(
             foreground = AWT_TEXT
             isFocusable = false
             font = hoshiraFont(Font.BOLD, 12f)
-            border = BorderFactory.createEmptyBorder(0, 14, 0, 8)
+            border = BorderFactory.createEmptyBorder(0, 12, 0, 5)
+            isLightWeightPopupEnabled = false
             ui = HoshiraComboBoxUi()
             renderer = HoshiraComboRenderer(prefix = "ИСТОЧНИК")
             addActionListener {
@@ -467,9 +533,10 @@ internal class NativeDesktopPlayerPanel(
             foreground = AWT_TEXT
             isFocusable = false
             font = hoshiraFont(Font.BOLD, 12f)
-            border = BorderFactory.createEmptyBorder(0, 12, 0, 5)
+            border = BorderFactory.createEmptyBorder(0, 6, 0, 4)
+            isLightWeightPopupEnabled = false
             ui = HoshiraComboBoxUi()
-            renderer = HoshiraComboRenderer()
+            renderer = HoshiraComboRenderer(centerClosedValue = true)
             addActionListener {
                 if (awtQualityUpdate) return@addActionListener
                 (selectedItem as? String)?.let(::selectQuality)
@@ -1802,7 +1869,12 @@ private fun HoshiraPlayerButton.drawPlayerGlyph(
             }
             PlayerGlyph.Volume,
             PlayerGlyph.Muted,
-            -> drawVolumeGlyph(graphics2D, centerX, centerY, glyph == PlayerGlyph.Muted)
+            -> drawVolumeGlyph(
+                graphics2D,
+                centerX - 3.0,
+                centerY,
+                glyph == PlayerGlyph.Muted,
+            )
             PlayerGlyph.Fullscreen,
             PlayerGlyph.ExitFullscreen,
             -> drawFullscreenGlyph(
@@ -1918,6 +1990,52 @@ private class HoshiraComboBoxUi : BasicComboBoxUI() {
         preferredSize = Dimension(28, 28)
         isFocusable = false
     }
+
+    override fun createPopup(): ComboPopup {
+        val popup = super.createPopup()
+        (popup as? BasicComboPopup)?.apply {
+            isOpaque = true
+            background = AWT_CONTROL_HIGH
+            border = BorderFactory.createEmptyBorder(6, 6, 6, 6)
+            list.background = AWT_CONTROL_HIGH
+            list.foreground = AWT_TEXT
+            list.selectionBackground = AWT_CONTROL_HOVER
+            list.selectionForeground = AWT_TEXT
+            list.addListSelectionListener { list.repaint() }
+            addPopupMenuListener(
+                object : PopupMenuListener {
+                    override fun popupMenuWillBecomeVisible(event: PopupMenuEvent?) {
+                        EventQueue.invokeLater {
+                            val popupWindow = SwingUtilities.getWindowAncestor(this@apply)
+                            val ownerWindow = SwingUtilities.getWindowAncestor(comboBox)
+                            if (
+                                popupWindow != null &&
+                                popupWindow !== ownerWindow &&
+                                popupWindow.width > 0 &&
+                                popupWindow.height > 0
+                            ) {
+                                runCatching {
+                                    popupWindow.shape = RoundRectangle2D.Double(
+                                        0.0,
+                                        0.0,
+                                        popupWindow.width.toDouble(),
+                                        popupWindow.height.toDouble(),
+                                        18.0,
+                                        18.0,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    override fun popupMenuWillBecomeInvisible(event: PopupMenuEvent?) = Unit
+
+                    override fun popupMenuCanceled(event: PopupMenuEvent?) = Unit
+                },
+            )
+        }
+        return popup
+    }
 }
 
 private class ComboArrowButton : JButton() {
@@ -1947,6 +2065,7 @@ private class ComboArrowButton : JButton() {
 private class HoshiraComboRenderer(
     private val accent: Boolean = false,
     private val prefix: String? = null,
+    private val centerClosedValue: Boolean = false,
 ) : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(
         list: JList<*>?,
@@ -1971,6 +2090,8 @@ private class HoshiraComboRenderer(
             BorderFactory.createEmptyBorder(7, 10, 7, 10)
         }
         label.isOpaque = index >= 0
+        label.horizontalAlignment =
+            if (index < 0 && centerClosedValue) SwingConstants.CENTER else SwingConstants.LEFT
         if (index < 0 && !prefix.isNullOrBlank()) {
             label.text = "$prefix   ${value?.toString().orEmpty()}"
         }

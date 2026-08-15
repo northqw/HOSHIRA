@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -57,9 +56,6 @@ fun main() {
             size = windowSizing.initialSize,
             position = WindowPosition(Alignment.Center),
         )
-        var placementBeforeFullscreen by remember {
-            mutableStateOf(WindowPlacement.Floating)
-        }
         var isFullscreen by remember {
             mutableStateOf(false)
         }
@@ -87,18 +83,10 @@ fun main() {
                     return@updateFullscreen
                 }
 
-                if (requestedFullscreen) {
-                    if (windowState.placement != WindowPlacement.Fullscreen) {
-                        placementBeforeFullscreen = windowState.placement
-                        windowState.placement = WindowPlacement.Fullscreen
-                    }
-                } else {
-                    // Compose can report the native fullscreen transition one
-                    // frame later than our state callback. Always restore the
-                    // remembered placement instead of depending on that lagging
-                    // value, otherwise Escape/the exit button becomes a no-op.
-                    windowState.placement = placementBeforeFullscreen
-                }
+                // The native video surface owns its borderless fullscreen host.
+                // Resizing/recreating the Skiko top-level window makes embedded
+                // Swing video turn black on Windows, so Compose only keeps the
+                // semantic state used by PlayerScreen and the Escape dispatcher.
                 isFullscreen = requestedFullscreen
             }
             DisposableEffect(window) {
