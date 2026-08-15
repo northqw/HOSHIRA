@@ -36,13 +36,13 @@ fun main() {
     System.setProperty("sun.awt.noerasebackground", "true")
     System.setProperty("sun.awt.erasebackgroundonresize", "false")
     if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
-        // Compose Desktop and JavaFX would otherwise both create Direct3D
-        // surfaces in the same Swing hierarchy. JFXPanel can keep playing
-        // audio while its off-screen D3D surface remains black. The software
-        // Prism compositor keeps the JavaFX scene, video and controls visible.
+        // The visible player is now a Swing surface fed by off-screen JavaFX
+        // snapshots, so JavaFX no longer competes with Skiko for an embedded
+        // Direct3D child window. Prefer GPU composition and retain software as
+        // an automatic fallback for machines where Direct3D is unavailable.
         System.setProperty(
             "prism.order",
-            System.getProperty("hoshira.javafx.prism", "sw"),
+            System.getProperty("hoshira.javafx.prism", "d3d,sw"),
         )
     }
 

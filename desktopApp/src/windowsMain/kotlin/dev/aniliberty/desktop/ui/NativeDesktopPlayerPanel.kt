@@ -1146,12 +1146,21 @@ internal class NativeDesktopPlayerPanel(
             player.onPlaying = Runnable {
                 debugSession.record("JavaFX playing")
                 frameCaptureTimer?.play()
+                hideStatus()
                 playButton?.text = "❚❚"
                 EventQueue.invokeLater {
                     awtPlayButton.glyph = PlayerGlyph.Pause
                     awtCenterPlayButton.isVisible = false
                 }
                 scheduleControlsHide()
+            }
+            player.onStalled = Runnable {
+                debugSession.record(
+                    "JavaFX stalled position=${player.currentTime.safeSeconds()}s " +
+                        "buffered=${player.bufferProgressTime.safeSeconds()}s",
+                )
+                frameCaptureTimer?.pause()
+                showResolving()
             }
             player.onPaused = Runnable {
                 frameCaptureTimer?.pause()
@@ -1263,7 +1272,11 @@ internal class NativeDesktopPlayerPanel(
         if (disposed.get()) return
         val image = snapshotImage ?: return
         val buffers = snapshotBuffers ?: return
-        val target = buffers[snapshotWriteIndex]
+        val targetIndex = buffers.indices
+            .map { (snapshotWriteIndex + it) % buffers.size }
+            .firstOrNull { index -> !videoSurface.isFrameInUse(buffers[index]) }
+            ?: return
+        val target = buffers[targetIndex]
         try {
             video.snapshot(parameters, image)
             val pixels = (target.raster.dataBuffer as DataBufferInt).data
@@ -1278,7 +1291,7 @@ internal class NativeDesktopPlayerPanel(
                 snapshotWidth,
             )
             videoSurface.presentFrame(target)
-            snapshotWriteIndex = (snapshotWriteIndex + 1) % buffers.size
+            snapshotWriteIndex = (targetIndex + 1) % buffers.size
             if (!firstFrameLogged) {
                 firstFrameLogged = true
                 debugSession.record("Swing first video frame captured")
@@ -1709,6 +1722,9 @@ private class AwtVideoSurface : JPanel() {
     var frame: BufferedImage? = null
 
     @Volatile
+    private var paintingFrame: BufferedImage? = null
+
+    @Volatile
     private var loading = true
 
     private var loaderAngle = 0
@@ -1726,6 +1742,7 @@ private class AwtVideoSurface : JPanel() {
         minimumSize = Dimension(1, 1)
     }
 
+    @Synchronized
     fun presentFrame(image: BufferedImage) {
         frame = image
         frameVersion.incrementAndGet()
@@ -1733,6 +1750,10 @@ private class AwtVideoSurface : JPanel() {
             repaint()
         }
     }
+
+    @Synchronized
+    fun isFrameInUse(image: BufferedImage): Boolean =
+        image === frame || image === paintingFrame
 
     fun setLoading(value: Boolean) {
         loading = value
@@ -1761,13 +1782,16 @@ private class AwtVideoSurface : JPanel() {
 
     override fun paintComponent(graphics: Graphics) {
         val paintedVersion = frameVersion.get()
+        val imageToPaint = synchronized(this) {
+            frame.also { paintingFrame = it }
+        }
         super.paintComponent(graphics)
         val graphics2D = graphics.create() as Graphics2D
         try {
             enableHighQualityRendering(graphics2D)
             graphics2D.color = AwtColor.BLACK
             graphics2D.fillRect(0, 0, width, height)
-            frame?.let { image ->
+            imageToPaint?.let { image ->
                 val scale = minOf(
                     width.toDouble() / image.width.coerceAtLeast(1),
                     height.toDouble() / image.height.coerceAtLeast(1),
@@ -1814,6 +1838,9 @@ private class AwtVideoSurface : JPanel() {
                 )
             }
         } finally {
+            synchronized(this) {
+                if (paintingFrame === imageToPaint) paintingFrame = null
+            }
             graphics2D.dispose()
             repaintQueued.set(false)
             if (paintedVersion != frameVersion.get() && repaintQueued.compareAndSet(false, true)) {
@@ -2103,16 +2130,18 @@ private class HoshiraComboBoxUi : BasicComboBoxUI() {
     override fun createPopup(): ComboPopup {
         val popup = super.createPopup()
         (popup as? BasicComboPopup)?.apply {
-            isOpaque = false
-            background = AwtColor(0, 0, 0, 0)
-            border = BorderFactory.createEmptyBorder(5, 5, 5, 5)
+            isOpaque = true
+            background = AWT_CONTROL_HIGH
+            border = BorderFactory.createEmptyBorder()
             components
                 .filterIsInstance<javax.swing.JScrollPane>()
                 .firstOrNull()
                 ?.apply {
-                    isOpaque = false
+                    isOpaque = true
+                    background = AWT_CONTROL_HIGH
                     border = BorderFactory.createEmptyBorder()
-                    viewport.isOpaque = false
+                    viewport.isOpaque = true
+                    viewport.background = AWT_CONTROL_HIGH
                 }
             list.background = AWT_CONTROL_HIGH
             list.foreground = AWT_TEXT
@@ -2132,15 +2161,17 @@ private class HoshiraComboBoxUi : BasicComboBoxUI() {
                                 popupWindow.height > 0
                             ) {
                                 runCatching {
-                                    popupWindow.background = AwtColor(0, 0, 0, 0)
+                                    popupWindow.background = AWT_CONTROL_HIGH
                                     (popupWindow as? javax.swing.RootPaneContainer)?.let { rootHost ->
                                         rootHost.rootPane.apply {
                                             border = BorderFactory.createEmptyBorder()
-                                            isOpaque = false
+                                            isOpaque = true
+                                            background = AWT_CONTROL_HIGH
                                         }
                                         (rootHost.contentPane as? JComponent)?.apply {
                                             border = BorderFactory.createEmptyBorder()
-                                            isOpaque = false
+                                            isOpaque = true
+                                            background = AWT_CONTROL_HIGH
                                         }
                                     }
                                     popupWindow.shape = RoundRectangle2D.Double(
@@ -2323,9 +2354,9 @@ private fun hoshiraFont(style: Int, size: Float): Font =
         .deriveFont(Font.PLAIN, size)
 
 private const val SEEK_RANGE = 1_000.0
-private const val CAPTURE_WIDTH = 1_280
-private const val CAPTURE_HEIGHT = 720
-private const val CAPTURE_OPTIMAL_WIDTH = 1_152
+private const val CAPTURE_WIDTH = 1_024
+private const val CAPTURE_HEIGHT = 576
+private const val CAPTURE_OPTIMAL_WIDTH = 1_024
 private const val MIN_CAPTURE_WIDTH = 640
 private const val MIN_CAPTURE_HEIGHT = 360
 private const val FRAME_CAPTURE_INTERVAL_MS = 1_000.0 / 23.976

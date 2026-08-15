@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -219,12 +218,20 @@ private fun ContinueWatchingRail(
                             contentScale = ContentScale.Crop,
                             filterQuality = FilterQuality.Medium,
                         )
-                        LinearProgressIndicator(
-                            progress = { item.fraction },
-                            modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
-                            color = AniColors.OrangeBright,
-                            trackColor = Color.White.copy(alpha = 0.18f),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .align(Alignment.BottomCenter)
+                                .background(Color.White.copy(alpha = 0.18f)),
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(item.fraction.coerceIn(0f, 1f))
+                                    .height(4.dp)
+                                    .background(AniColors.OrangeBright),
+                            )
+                        }
                     }
                     Column(Modifier.padding(16.dp)) {
                         Text(
