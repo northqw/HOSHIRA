@@ -91,6 +91,7 @@ compose.desktop {
                 "java.sql",
                 "jdk.crypto.ec",
                 "jdk.unsupported",
+                "jdk.unsupported.desktop",
             )
             if (targetOs == "windows") {
                 windows {

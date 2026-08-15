@@ -2,6 +2,7 @@ package dev.aniliberty.desktop
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,8 +21,11 @@ import dev.aniliberty.desktop.ui.HoshiraApp
 import java.awt.Dimension
 import java.awt.GraphicsConfiguration
 import java.awt.GraphicsEnvironment
+import java.awt.KeyEventDispatcher
+import java.awt.KeyboardFocusManager
 import java.awt.Rectangle
 import java.awt.Toolkit
+import java.awt.event.KeyEvent
 import kotlinx.coroutines.delay
 
 fun main() {
@@ -76,31 +80,52 @@ fun main() {
                 applyHoshiraWindowStyle(window)
             }
 
+            val updateFullscreen = updateFullscreen@ { requestedFullscreen: Boolean ->
+                if (requestedFullscreen == isFullscreen) {
+                    return@updateFullscreen
+                }
+
+                val handledByPlatform = setHoshiraWindowFullscreen(
+                    window = window,
+                    fullscreen = requestedFullscreen,
+                )
+                if (!handledByPlatform && requestedFullscreen) {
+                    if (windowState.placement != WindowPlacement.Fullscreen) {
+                        placementBeforeFullscreen = windowState.placement
+                        windowState.placement = WindowPlacement.Fullscreen
+                    }
+                } else if (
+                    !handledByPlatform &&
+                    windowState.placement == WindowPlacement.Fullscreen
+                ) {
+                    windowState.placement = placementBeforeFullscreen
+                }
+                isFullscreen = requestedFullscreen
+            }
+            DisposableEffect(window) {
+                val dispatcher = KeyEventDispatcher { event ->
+                    if (
+                        event.id == KeyEvent.KEY_PRESSED &&
+                        event.keyCode == KeyEvent.VK_ESCAPE &&
+                        isFullscreen
+                    ) {
+                        updateFullscreen(false)
+                        true
+                    } else {
+                        false
+                    }
+                }
+                val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
+                focusManager.addKeyEventDispatcher(dispatcher)
+                onDispose {
+                    focusManager.removeKeyEventDispatcher(dispatcher)
+                }
+            }
+
             HoshiraApp(
                 repository = repository,
                 isFullscreen = isFullscreen,
-                onFullscreenChange = { requestedFullscreen ->
-                    if (requestedFullscreen == isFullscreen) {
-                        return@HoshiraApp
-                    }
-
-                    val handledByPlatform = setHoshiraWindowFullscreen(
-                        window = window,
-                        fullscreen = requestedFullscreen,
-                    )
-                    if (!handledByPlatform && requestedFullscreen) {
-                        if (windowState.placement != WindowPlacement.Fullscreen) {
-                            placementBeforeFullscreen = windowState.placement
-                            windowState.placement = WindowPlacement.Fullscreen
-                        }
-                    } else if (
-                        !handledByPlatform &&
-                        windowState.placement == WindowPlacement.Fullscreen
-                    ) {
-                        windowState.placement = placementBeforeFullscreen
-                    }
-                    isFullscreen = requestedFullscreen
-                },
+                onFullscreenChange = updateFullscreen,
                 modifier = Modifier.fillMaxSize(),
             )
         }

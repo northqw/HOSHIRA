@@ -11,9 +11,6 @@ import com.sun.jna.platform.win32.User32
 import java.awt.Color
 import java.awt.EventQueue
 import java.awt.Frame
-import java.awt.event.WindowAdapter
-import java.awt.event.WindowEvent
-import java.awt.event.WindowFocusListener
 import java.util.WeakHashMap
 import javax.imageio.ImageIO
 import javax.swing.JComponent
@@ -95,22 +92,11 @@ private fun setHoshiraWindowFullscreenOnAwt(
 
         val style = User32.INSTANCE.GetWindowLong(hwnd, GWL_STYLE)
         val extendedStyle = User32.INSTANCE.GetWindowLong(hwnd, GWL_EXSTYLE)
-        val focusListener = object : WindowAdapter() {
-            override fun windowGainedFocus(event: WindowEvent) {
-                setFullscreenTopmost(hwnd, topmost = true)
-            }
-
-            override fun windowLostFocus(event: WindowEvent) {
-                setFullscreenTopmost(hwnd, topmost = false)
-            }
-        }
         fullscreenSnapshots[window] = FullscreenSnapshot(
             style = style,
             extendedStyle = extendedStyle,
             placement = placement,
-            focusListener = focusListener,
         )
-        window.addWindowFocusListener(focusListener)
 
         User32.INSTANCE.ShowWindow(hwnd, SW_RESTORE)
         User32.INSTANCE.SetWindowLong(
@@ -133,7 +119,7 @@ private fun setHoshiraWindowFullscreenOnAwt(
         val monitorBounds = monitorInfo.rcMonitor
         User32.INSTANCE.SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            HWND_TOP,
             monitorBounds.left,
             monitorBounds.top,
             (monitorBounds.right - monitorBounds.left).coerceAtLeast(1),
@@ -141,10 +127,10 @@ private fun setHoshiraWindowFullscreenOnAwt(
             SWP_FRAMECHANGED or SWP_SHOWWINDOW or SWP_NOOWNERZORDER,
         )
         User32.INSTANCE.SetForegroundWindow(hwnd)
+        refreshFullscreenContent(window)
     } else {
         val snapshot = fullscreenSnapshots.remove(window)
             ?: return@runCatching false
-        window.removeWindowFocusListener(snapshot.focusListener)
         User32.INSTANCE.SetWindowLong(hwnd, GWL_STYLE, snapshot.style)
         User32.INSTANCE.SetWindowLong(
             hwnd,
@@ -171,27 +157,21 @@ private fun setHoshiraWindowFullscreenOnAwt(
             DWMWCP_DEFAULT,
         )
         setDwmInt(hwnd, DWMWA_BORDER_COLOR, COLOR_BLACK)
+        refreshFullscreenContent(window)
     }
 
     true
 }.getOrDefault(false)
 
-private fun setFullscreenTopmost(
-    hwnd: HWND,
-    topmost: Boolean,
-) {
-    User32.INSTANCE.SetWindowPos(
-        hwnd,
-        if (topmost) HWND_TOPMOST else HWND_NOTOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE or
-            SWP_NOSIZE or
-            SWP_NOOWNERZORDER or
-            SWP_NOACTIVATE,
-    )
+private fun refreshFullscreenContent(window: Frame) {
+    window.invalidate()
+    window.validate()
+    window.repaint()
+    window.requestFocus()
+    EventQueue.invokeLater {
+        window.validate()
+        window.repaint()
+    }
 }
 
 internal fun borderlessFullscreenStyle(style: Int): Int =
@@ -238,11 +218,10 @@ private data class FullscreenSnapshot(
     val style: Int,
     val extendedStyle: Int,
     val placement: WINDOWPLACEMENT,
-    val focusListener: WindowFocusListener,
 )
 
 private val fullscreenSnapshots = WeakHashMap<Frame, FullscreenSnapshot>()
-private val HWND_TOPMOST = HWND(Pointer.createConstant(-1))
+private val HWND_TOP = HWND(Pointer.createConstant(0))
 private val HWND_NOTOPMOST = HWND(Pointer.createConstant(-2))
 
 private const val GWL_STYLE = -16
@@ -258,7 +237,6 @@ private const val MONITOR_DEFAULT_TO_NEAREST = 2
 private const val SW_RESTORE = 9
 private const val SWP_NOSIZE = 0x0001
 private const val SWP_NOMOVE = 0x0002
-private const val SWP_NOACTIVATE = 0x0010
 private const val SWP_NOOWNERZORDER = 0x0200
 private const val SWP_FRAMECHANGED = 0x0020
 private const val SWP_SHOWWINDOW = 0x0040

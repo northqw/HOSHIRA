@@ -127,13 +127,16 @@ internal class HlsStreamResolver(
         val video = request<VideoHubVideo>(
             "$VIDEO_HUB_API/player/sv/video/${videoId.urlEncode()}",
         )
-        val hlsUrl = video.sources?.hlsUrl
-            ?.toHttpUri()
-            ?.toASCIIString()
-            ?: throw HlsResolutionException("VideoHub не вернул доступный HLS-поток.")
-        debug("hls resolved ${hlsUrl.hlsDebugUrl()}")
+        val source = video.sources
+            ?.toDirectMedia(preferredQuality)
+            ?: throw HlsResolutionException("VideoHub не вернул доступный медиапоток.")
+        debug(
+            "CVH media resolved quality=${source.quality ?: "adaptive"} " +
+                "available=${source.availableQualities.joinToString(",")} " +
+                source.url.hlsDebugUrl(),
+        )
 
-        return PlaybackSource.DirectMedia(hlsUrl)
+        return source
     }
 
     private fun resolveKodik(
@@ -585,7 +588,46 @@ private data class VideoHubVideo(
 @Serializable
 private data class VideoHubSources(
     val hlsUrl: String? = null,
+    val mpeg4kUrl: String? = null,
+    val mpegQhdUrl: String? = null,
+    val mpegFullHdUrl: String? = null,
+    val mpegHighUrl: String? = null,
+    val mpegMediumUrl: String? = null,
+    val mpegLowUrl: String? = null,
+    val mpegLowestUrl: String? = null,
+    val mpegTinyUrl: String? = null,
 )
+
+private fun VideoHubSources.toDirectMedia(
+    preferredQuality: String?,
+): PlaybackSource.DirectMedia? {
+    val mp4ByQuality = linkedMapOf(
+        "2160" to mpeg4kUrl,
+        "1440" to mpegQhdUrl,
+        "1080" to mpegFullHdUrl,
+        "720" to mpegHighUrl,
+        "480" to mpegMediumUrl,
+        "360" to mpegLowUrl,
+        "240" to mpegLowestUrl,
+        "144" to mpegTinyUrl,
+    ).mapValues { (_, url) ->
+        url?.toHttpUri()?.toASCIIString()
+    }.filterValues { it != null }
+    if (mp4ByQuality.isNotEmpty()) {
+        val preferred = preferredQuality.normalizedQualityKey()
+        val selectedQuality = listOfNotNull(preferred)
+            .plus(VIDEO_HUB_QUALITY_ORDER)
+            .firstOrNull(mp4ByQuality::containsKey)
+            ?: mp4ByQuality.keys.first()
+        return PlaybackSource.DirectMedia(
+            url = requireNotNull(mp4ByQuality[selectedQuality]),
+            quality = selectedQuality.qualityLabel(),
+            availableQualities = mp4ByQuality.keys.map(String::qualityLabel),
+        )
+    }
+    val hls = hlsUrl?.toHttpUri()?.toASCIIString() ?: return null
+    return PlaybackSource.DirectMedia(hls)
+}
 
 @Serializable
 private data class KodikPlayerResponse(
@@ -889,6 +931,16 @@ private val KODIK_ENDPOINT_REGEX = Regex(
     """url:\s*atob\(["']([A-Za-z0-9+/=]+)["']\)""",
 )
 private val KODIK_QUALITY_ORDER = listOf("720", "480", "360")
+private val VIDEO_HUB_QUALITY_ORDER = listOf(
+    "2160",
+    "1440",
+    "1080",
+    "720",
+    "480",
+    "360",
+    "240",
+    "144",
+)
 private const val BROWSER_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
