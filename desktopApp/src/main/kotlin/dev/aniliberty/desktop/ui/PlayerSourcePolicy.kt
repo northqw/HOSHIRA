@@ -6,3 +6,8 @@ internal fun playerSourcePriority(name: String): Int = when {
     name.contains("Alloha", ignoreCase = true) -> 2
     else -> 3
 }
+
+internal fun isDeferredPlayerSource(name: String): Boolean =
+    name.contains("Alloha", ignoreCase = true)
+
+internal const val DEFERRED_PLAYER_NOTE = "Поддержка появится позже"

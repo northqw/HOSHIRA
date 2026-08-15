@@ -7,6 +7,7 @@ internal data class AndroidPlayerHostSource(
     val episodeId: String,
     val label: String,
     val selected: Boolean,
+    val enabled: Boolean = true,
 )
 
 internal data class AndroidPlayerHostConfig(
@@ -36,19 +37,24 @@ internal fun androidPlayerHostDocument(config: AndroidPlayerHostConfig): String 
     val encodedUrl = config.playerUrl.toBase64()
     val encodedQuality = config.preferredQuality.orEmpty().toBase64()
     val sourceOptions = config.sources.joinToString("\n") { source ->
+        val unavailable = if (source.enabled) "" else " disabled unavailable"
         """
             <button
-              class="source-option${if (source.selected) " selected" else ""}"
+              class="source-option${if (source.selected) " selected" else ""}$unavailable"
               data-source-id="${source.episodeId.escapeHtml()}"
               type="button"
+              ${if (source.enabled) "" else "disabled aria-disabled=\"true\""}
             >
-              <span>${source.label.escapeHtml()}</span>
+              <span>
+                ${source.label.escapeHtml()}
+                ${if (source.enabled) "" else "<small>Поддержка появится позже</small>"}
+              </span>
               ${if (source.selected) "<span class=\"check\">✓</span>" else ""}
             </button>
         """.trimIndent()
     }
-    val selectedSource = config.sources.firstOrNull(AndroidPlayerHostSource::selected)
-        ?: config.sources.firstOrNull()
+    val selectedSource = config.sources.firstOrNull { it.selected && it.enabled }
+        ?: config.sources.firstOrNull(AndroidPlayerHostSource::enabled)
     val sourcePicker = if (config.sources.size > 1) {
         """
             <div class="source-picker">
@@ -268,6 +274,17 @@ internal fun androidPlayerHostDocument(config: AndroidPlayerHostConfig): String 
               background: transparent;
               text-align: left;
               font-weight: 800;
+            }
+            .source-option.unavailable {
+              cursor: default;
+              opacity: .46;
+            }
+            .source-option small {
+              display: block;
+              margin-top: 4px;
+              color: rgba(255,255,255,.55);
+              font-size: .68em;
+              font-weight: 600;
             }
             .source-option.selected { color: var(--orange); background: rgba(255,87,15,.1); }
             .center-controls {
@@ -843,7 +860,9 @@ internal fun androidPlayerHostDocument(config: AndroidPlayerHostConfig): String 
                 document.getElementById('source-menu')?.classList.toggle('open');
               });
               document.querySelectorAll('.source-option').forEach(option => {
-                option.addEventListener('click', () => action('source', option.dataset.sourceId || ''));
+                option.addEventListener('click', () => {
+                  if (!option.disabled) action('source', option.dataset.sourceId || '');
+                });
               });
               document.querySelectorAll('.control,input[type=range],.source-option').forEach(element => {
                 element.addEventListener('pointerdown', showChrome);

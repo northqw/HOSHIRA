@@ -132,6 +132,7 @@ fun PlayerScreen(
                 episodeId = source.id,
                 label = source.displayPlayerName,
                 selected = source.id == session.episode.id,
+                enabled = !source.displayPlayerName.contains("Alloha", ignoreCase = true),
             )
         },
         resumeSeconds = session.resumeSeconds,

@@ -57,4 +57,36 @@ class AndroidPlayerHostTest {
             shouldBlockKodikRequest("https://video.kodik-cdn.example/episode/master.m3u8"),
         )
     }
+
+    @Test
+    fun `Alloha source is visible but disabled`() {
+        val document = androidPlayerHostDocument(
+            AndroidPlayerHostConfig(
+                playerUrl = "https://kodikplayer.com/episode/test",
+                title = "Test",
+                subtitle = "1 серия",
+                position = "1 из 1",
+                sources = listOf(
+                    AndroidPlayerHostSource("kodik", "Kodik", selected = true),
+                    AndroidPlayerHostSource(
+                        "alloha",
+                        "Alloha",
+                        selected = false,
+                        enabled = false,
+                    ),
+                ),
+                resumeSeconds = 0.0,
+                startupVolume = 1f,
+                preferredQuality = null,
+                hasPrevious = false,
+                hasNext = false,
+                controlsHideDelayMs = 3_000,
+                showLoading = true,
+            ),
+        )
+
+        assertTrue(document.contains("disabled aria-disabled=\"true\""))
+        assertTrue(document.contains("Поддержка появится позже"))
+        assertTrue(document.contains("if (!option.disabled) action('source'"))
+    }
 }

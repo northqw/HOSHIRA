@@ -862,8 +862,9 @@ private fun DetailsContent(
     var selectedPlayer by remember(release.id, selectedDubbing) {
         mutableStateOf(
             playerGroups.firstOrNull {
-                it.key.contains(preferredSourceName, ignoreCase = true)
-            }?.key ?: playerGroups.firstOrNull()?.key,
+                !isDeferredPlayerSource(it.key) &&
+                    it.key.contains(preferredSourceName, ignoreCase = true)
+            }?.key ?: playerGroups.firstOrNull { !isDeferredPlayerSource(it.key) }?.key,
         )
     }
     val selectedEpisodes = playerGroups
@@ -1046,6 +1047,7 @@ private fun DetailsContent(
                                     scope.launch { episodeListState.scrollToItem(0) }
                                 },
                                 placeholder = "Выберите источник",
+                                disabledOption = ::isDeferredPlayerSource,
                             )
                         }
                     }

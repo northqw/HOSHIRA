@@ -11,6 +11,7 @@ import dev.aniliberty.desktop.data.AnimeListKind
 import dev.aniliberty.desktop.data.AnimeMembership
 import dev.aniliberty.desktop.data.NetworkAccountRepository
 import dev.aniliberty.desktop.data.PlayerPreferences
+import dev.aniliberty.desktop.data.PreferredPlayerSource
 import dev.aniliberty.desktop.data.ReleaseRepository
 import dev.aniliberty.desktop.data.ResumeBehavior
 import dev.aniliberty.desktop.data.UserDataStore
@@ -121,7 +122,11 @@ class AppController(
 
     fun preferredSource(releaseId: Int): String =
         userDataStore.snapshot().lastSourceByRelease[releaseId]
-            ?: preferences.preferredSource.displayName
+            ?.takeUnless { it.contains("Alloha", ignoreCase = true) }
+            ?: preferences.preferredSource
+                .takeUnless { it == PreferredPlayerSource.Alloha }
+                ?.displayName
+            ?: PreferredPlayerSource.Kodik.displayName
 
     var playerMessage: String? by mutableStateOf(null)
         private set

@@ -271,7 +271,7 @@ fun PlayerScreen(
                     )
                 } else {
                     LoadingState(
-                        label = "Подготавливаем HLS-поток…",
+                        label = null,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

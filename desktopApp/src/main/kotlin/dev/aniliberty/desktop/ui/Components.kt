@@ -336,6 +336,8 @@ fun DubbingDropdown(
     placeholder: String = "Выберите студию",
     countSuffix: String = "сер.",
     width: androidx.compose.ui.unit.Dp = 420.dp,
+    disabledOption: (String) -> Boolean = { false },
+    disabledNote: String = DEFERRED_PLAYER_NOTE,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var hovered by remember { mutableStateOf(false) }
@@ -412,28 +414,44 @@ fun DubbingDropdown(
         ) {
             options.forEach { option ->
                 val isSelected = option.first == selected
+                val isDisabled = disabledOption(option.first)
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = option.first,
-                                color = AniColors.Text,
-                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = option.first,
+                                    color = if (isDisabled) AniColors.TextMuted else AniColors.Text,
+                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (isDisabled) {
+                                    Text(
+                                        text = disabledNote,
+                                        color = AniColors.TextMuted.copy(alpha = 0.72f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
                             Text(
                                 text = "${option.second} $countSuffix",
-                                color = if (isSelected) AniColors.OrangeBright else AniColors.TextMuted,
+                                color = when {
+                                    isDisabled -> AniColors.TextMuted.copy(alpha = 0.55f)
+                                    isSelected -> AniColors.OrangeBright
+                                    else -> AniColors.TextMuted
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
                     },
                     onClick = {
-                        onSelected(option.first)
-                        expanded = false
+                        if (!isDisabled) {
+                            onSelected(option.first)
+                            expanded = false
+                        }
                     },
+                    enabled = !isDisabled,
                     modifier = Modifier.background(
                         if (isSelected) AniColors.Orange.copy(alpha = 0.12f) else Color.Transparent,
                     ),
@@ -1018,7 +1036,7 @@ fun RemoteImage(
 
 @Composable
 fun LoadingState(
-    label: String = "Загружаем релизы…",
+    label: String? = "Загружаем релизы…",
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1031,8 +1049,10 @@ fun LoadingState(
             strokeWidth = 3.dp,
             modifier = Modifier.size(38.dp),
         )
-        Spacer(Modifier.height(18.dp))
-        Text(label, color = AniColors.TextMuted)
+        if (!label.isNullOrBlank()) {
+            Spacer(Modifier.height(18.dp))
+            Text(label, color = AniColors.TextMuted)
+        }
     }
 }
 

@@ -16,6 +16,8 @@ class PlayerHostScriptTest {
             listOf("Kodik", "Sibnet", "Alloha"),
             sources.sortedBy(::playerSourcePriority),
         )
+        kotlin.test.assertTrue(isDeferredPlayerSource("Alloha"))
+        kotlin.test.assertFalse(isDeferredPlayerSource("Kodik"))
     }
 
     @Test
@@ -131,5 +133,36 @@ class PlayerHostScriptTest {
         kotlin.test.assertTrue(
             shouldBlockKodikRequest("https://kodikplayer.com/assets/preroll/video.mp4"),
         )
+    }
+
+    @Test
+    fun `Alloha is shown as a disabled future source`() {
+        val script = playerHostScript(
+            playerUrl = "https://kodikplayer.com/episode/test",
+            chrome = EmbeddedPlayerChrome(
+                title = "Test",
+                subtitle = "1 серия",
+                position = "1 из 1",
+                hasPrevious = false,
+                hasNext = false,
+                sources = listOf(
+                    EmbeddedPlayerSource("kodik", "Kodik", selected = true),
+                    EmbeddedPlayerSource("alloha", "Alloha", selected = false),
+                ),
+            ),
+        )
+        val decodedPayloads = Regex("""decode\("([^"]+)"\)""")
+            .findAll(script)
+            .map { match ->
+                String(
+                    Base64.getDecoder().decode(match.groupValues[1]),
+                    StandardCharsets.UTF_8,
+                )
+            }
+            .toList()
+        val markup = decodedPayloads[2]
+
+        assertContains(markup, "Поддержка появится позже")
+        assertContains(markup, "disabled aria-disabled=\"true\"")
     }
 }

@@ -945,7 +945,11 @@ private fun MobileDetailsScreen(
                     )
             }
             var selectedPlayer by remember(release.id, selectedDubbing) {
-                mutableStateOf(playerGroups.firstOrNull()?.key)
+                mutableStateOf(
+                    playerGroups.firstOrNull {
+                        !it.key.contains("Alloha", ignoreCase = true)
+                    }?.key,
+                )
             }
             val selectedEpisodes = playerGroups
                 .firstOrNull { it.key == selectedPlayer }
@@ -1045,6 +1049,9 @@ private fun MobileDetailsScreen(
                                 onSelected = { selectedPlayer = it },
                                 placeholder = "Выберите источник",
                                 width = maxWidth,
+                                disabledOption = {
+                                    it.contains("Alloha", ignoreCase = true)
+                                },
                             )
                         }
                     }

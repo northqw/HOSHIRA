@@ -31,10 +31,6 @@ android {
         versionName = "0.3.3"
     }
 
-    sourceSets.named("main") {
-        res.srcDir("../desktopApp/src/main/composeResources")
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true

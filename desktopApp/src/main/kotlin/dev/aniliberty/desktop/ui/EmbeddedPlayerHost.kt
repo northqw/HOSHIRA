@@ -511,18 +511,24 @@ internal fun playerHostScript(
     } else {
         "<span></span>"
     }
-    val selectedSource = chrome.sources.firstOrNull(EmbeddedPlayerSource::selected)
-        ?: chrome.sources.firstOrNull()
+    val selectedSource = chrome.sources.firstOrNull {
+        it.selected && !isDeferredPlayerSource(it.label)
+    } ?: chrome.sources.firstOrNull { !isDeferredPlayerSource(it.label) }
     val sourceSelector = selectedSource?.let { selected ->
         if (chrome.sources.size > 1) {
             val sourceOptions = chrome.sources.joinToString("\n") { source ->
+                val deferred = isDeferredPlayerSource(source.label)
                 """
                     <button
-                      class="source-option${if (source.selected) " selected" else ""}"
+                      class="source-option${if (source.selected && !deferred) " selected" else ""}${if (deferred) " unavailable" else ""}"
                       data-action="source:${source.episodeId.escapeHtml()}"
+                      ${if (deferred) "disabled aria-disabled=\"true\"" else ""}
                     >
-                      <span>${source.label.escapeHtml()}</span>
-                      ${if (source.selected) "<span class=\"selected-mark\">✓</span>" else ""}
+                      <span>
+                        ${source.label.escapeHtml()}
+                        ${if (deferred) "<small>$DEFERRED_PLAYER_NOTE</small>" else ""}
+                      </span>
+                      ${if (source.selected && !deferred) "<span class=\"selected-mark\">✓</span>" else ""}
                     </button>
                 """.trimIndent()
             }
@@ -1092,6 +1098,17 @@ internal fun playerHostScript(
         .source-option.selected {
           background: rgba(255, 110, 16, 0.13);
           color: #ff9b4a;
+        }
+        .source-option.unavailable {
+          cursor: default;
+          opacity: 0.46;
+        }
+        .source-option small {
+          display: block;
+          margin-top: 3px;
+          color: rgba(235, 236, 242, 0.55);
+          font-size: 10px;
+          font-weight: 650;
         }
         .selected-mark {
           color: #ff8a24;

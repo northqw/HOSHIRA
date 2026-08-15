@@ -65,12 +65,20 @@ fun SettingsScreen(
             SettingsSection("Плеер") {
                 ChoiceSetting(
                     title = "Источник по умолчанию",
-                    value = preferences.preferredSource.displayName,
+                    value = preferences.preferredSource
+                        .takeUnless { it == PreferredPlayerSource.Alloha }
+                        ?.displayName
+                        ?: PreferredPlayerSource.Kodik.displayName,
                     onClick = {
                         val values = PreferredPlayerSource.entries
-                        val next = values[(values.indexOf(preferences.preferredSource) + 1) % values.size]
+                            .filterNot { it == PreferredPlayerSource.Alloha }
+                        val current = preferences.preferredSource
+                            .takeIf(values::contains)
+                            ?: PreferredPlayerSource.Kodik
+                        val next = values[(values.indexOf(current) + 1) % values.size]
                         onChange(preferences.copy(preferredSource = next))
                     },
+                    subtitle = "Alloha — поддержка появится позже",
                 )
                 ToggleSetting(
                     title = "Автоматически открывать на весь экран",
@@ -154,8 +162,13 @@ private fun ToggleSetting(
 }
 
 @Composable
-private fun ChoiceSetting(title: String, value: String, onClick: () -> Unit) {
-    SettingRow(title, "Нажмите, чтобы выбрать следующий вариант") {
+private fun ChoiceSetting(
+    title: String,
+    value: String,
+    onClick: () -> Unit,
+    subtitle: String = "Нажмите, чтобы выбрать следующий вариант",
+) {
+    SettingRow(title, subtitle) {
         Text(
             value,
             color = AniColors.OrangeBright,
