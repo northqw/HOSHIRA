@@ -249,7 +249,7 @@ internal fun androidPlayerHostDocument(config: AndroidPlayerHostConfig): String 
               top: calc(100% + 8px);
               right: 0;
               display: none;
-              width: 250px;
+              width: min(310px, calc(100vw - 24px));
               padding: 8px;
               border: 1px solid rgba(255,255,255,.12);
               border-radius: 14px;
@@ -275,6 +275,7 @@ internal fun androidPlayerHostDocument(config: AndroidPlayerHostConfig): String 
               text-align: left;
               font-weight: 800;
             }
+            .source-option > span:first-child { min-width: 0; }
             .source-option.unavailable {
               cursor: default;
               opacity: .46;
@@ -285,6 +286,8 @@ internal fun androidPlayerHostDocument(config: AndroidPlayerHostConfig): String 
               color: rgba(255,255,255,.55);
               font-size: .68em;
               font-weight: 600;
+              white-space: normal;
+              line-height: 1.35;
             }
             .source-option.selected { color: var(--orange); background: rgba(255,87,15,.1); }
             .center-controls {

@@ -3,6 +3,7 @@ package dev.aniliberty.desktop.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -56,6 +57,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -80,10 +83,10 @@ import dev.aniliberty.desktop.model.ReleaseDto
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class MobileTab(val label: String, val glyph: String) {
+private enum class MobileTab(val label: String, val glyph: String? = null) {
     Home("Главная", "⌂"),
-    Catalog("Каталог", "▦"),
-    Profile("Профиль", "●"),
+    Catalog("Каталог"),
+    Profile("Профиль"),
     Search("Поиск", "⌕"),
 }
 
@@ -974,18 +977,46 @@ private fun MobileDetailsScreen(
                                 ),
                             ),
                         )
-                        Text(
-                            "←",
+                        Box(
                             modifier = Modifier
                                 .statusBarsPadding()
                                 .padding(16.dp)
                                 .size(42.dp)
                                 .clip(CircleShape)
                                 .background(Color.Black.copy(alpha = 0.62f))
-                                .clickable(onClick = onBack)
-                                .padding(9.dp),
-                            style = MaterialTheme.typography.titleLarge,
-                        )
+                                .clickable(onClick = onBack),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Canvas(Modifier.size(22.dp)) {
+                                val stroke = 2.8.dp.toPx()
+                                val centerY = size.height / 2f
+                                val tipX = size.width * 0.24f
+                                val endX = size.width * 0.82f
+                                val wingX = size.width * 0.50f
+                                val wingOffset = size.height * 0.28f
+                                drawLine(
+                                    color = Color.White,
+                                    start = androidx.compose.ui.geometry.Offset(endX, centerY),
+                                    end = androidx.compose.ui.geometry.Offset(tipX, centerY),
+                                    strokeWidth = stroke,
+                                    cap = StrokeCap.Round,
+                                )
+                                drawLine(
+                                    color = Color.White,
+                                    start = androidx.compose.ui.geometry.Offset(tipX, centerY),
+                                    end = androidx.compose.ui.geometry.Offset(wingX, centerY - wingOffset),
+                                    strokeWidth = stroke,
+                                    cap = StrokeCap.Round,
+                                )
+                                drawLine(
+                                    color = Color.White,
+                                    start = androidx.compose.ui.geometry.Offset(tipX, centerY),
+                                    end = androidx.compose.ui.geometry.Offset(wingX, centerY + wingOffset),
+                                    strokeWidth = stroke,
+                                    cap = StrokeCap.Round,
+                                )
+                            }
+                        }
                         Column(
                             Modifier
                                 .align(Alignment.BottomStart)
@@ -1229,11 +1260,9 @@ private fun MobileBottomBar(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text(
-                    tab.glyph,
-                    style = MaterialTheme.typography.titleLarge,
+                MobileTabIcon(
+                    tab = tab,
                     color = if (active) AniColors.OrangeBright else AniColors.TextMuted,
-                    fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -1243,6 +1272,75 @@ private fun MobileBottomBar(
                     fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MobileTabIcon(tab: MobileTab, color: Color) {
+    tab.glyph?.let { glyph ->
+        Text(
+            glyph,
+            style = MaterialTheme.typography.titleLarge,
+            color = color,
+            fontWeight = FontWeight.Bold,
+        )
+        return
+    }
+
+    Canvas(Modifier.size(24.dp)) {
+        when (tab) {
+            MobileTab.Catalog -> {
+                val tileSize = size.width * 0.34f
+                val gap = size.width * 0.14f
+                val corner = androidx.compose.ui.geometry.CornerRadius(size.width * 0.075f)
+                listOf(
+                    androidx.compose.ui.geometry.Offset(0f, 0f),
+                    androidx.compose.ui.geometry.Offset(tileSize + gap, 0f),
+                    androidx.compose.ui.geometry.Offset(0f, tileSize + gap),
+                    androidx.compose.ui.geometry.Offset(tileSize + gap, tileSize + gap),
+                ).forEach { topLeft ->
+                    drawRoundRect(
+                        color = color,
+                        topLeft = topLeft,
+                        size = androidx.compose.ui.geometry.Size(tileSize, tileSize),
+                        cornerRadius = corner,
+                    )
+                }
+            }
+
+            MobileTab.Profile -> {
+                drawCircle(
+                    color = color,
+                    radius = size.width * 0.20f,
+                    center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height * 0.28f),
+                )
+                drawPath(
+                    path = Path().apply {
+                        moveTo(size.width * 0.12f, size.height * 0.92f)
+                        cubicTo(
+                            size.width * 0.14f,
+                            size.height * 0.61f,
+                            size.width * 0.31f,
+                            size.height * 0.50f,
+                            size.width * 0.50f,
+                            size.height * 0.50f,
+                        )
+                        cubicTo(
+                            size.width * 0.69f,
+                            size.height * 0.50f,
+                            size.width * 0.86f,
+                            size.height * 0.61f,
+                            size.width * 0.88f,
+                            size.height * 0.92f,
+                        )
+                        close()
+                    },
+                    color = color,
+                )
+            }
+
+            else -> Unit
         }
     }
 }

@@ -15,8 +15,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("Hoshira Community")]
 [assembly: AssemblyProduct("Hoshira Installer")]
 [assembly: AssemblyCopyright("Hoshira Community")]
-[assembly: AssemblyVersion("0.3.0.0")]
-[assembly: AssemblyFileVersion("0.3.0.0")]
+[assembly: AssemblyVersion("0.4.0.0")]
+[assembly: AssemblyFileVersion("0.4.0.0")]
 
 namespace Hoshira.Setup
 {
@@ -33,7 +33,7 @@ namespace Hoshira.Setup
 
     internal sealed class InstallerForm : Form
     {
-        private const string InstallerVersion = "0.3.0";
+        private const string InstallerVersion = "0.4.0";
         private const string PayloadResourceName = "Hoshira.Payload.msi";
         private const string SetupIconResourceName = "Hoshira.SetupIcon";
 
@@ -1150,7 +1150,7 @@ namespace Hoshira.Setup
             BrandArtwork.DrawGlyph(
                 graphics,
                 new RectangleF(105, 125, 180, 180),
-                Color.FromArgb(205, 255, 255, 255));
+                Color.FromArgb(255, 255, 100, 26));
         }
     }
 
@@ -1169,7 +1169,7 @@ namespace Hoshira.Setup
             BrandArtwork.DrawGlyph(
                 eventArgs.Graphics,
                 new RectangleF(1, 1, Width - 2, Height - 2),
-                Color.FromArgb(235, 255, 255, 255));
+                Color.FromArgb(255, 255, 100, 26));
         }
     }
 
@@ -1180,42 +1180,56 @@ namespace Hoshira.Setup
             RectangleF bounds,
             Color color)
         {
-            float width = bounds.Width;
-            float height = bounds.Height;
-            float strokeWidth = Math.Min(width, height) * 0.065F;
-            float markStrokeWidth = strokeWidth * 1.22F;
-
-            using (GraphicsPath outline = new GraphicsPath())
+            using (GraphicsPath glyph = new GraphicsPath(FillMode.Alternate))
             {
-                outline.StartFigure();
-                outline.AddLine(Point(bounds, 0.50F, 0.05F), Point(bounds, 0.84F, 0.24F));
-                outline.AddLine(Point(bounds, 0.84F, 0.24F), Point(bounds, 0.84F, 0.76F));
-                outline.AddLine(Point(bounds, 0.84F, 0.76F), Point(bounds, 0.50F, 0.95F));
-                outline.AddLine(Point(bounds, 0.50F, 0.95F), Point(bounds, 0.16F, 0.76F));
-                outline.AddLine(Point(bounds, 0.16F, 0.76F), Point(bounds, 0.16F, 0.24F));
-                outline.CloseFigure();
+                glyph.StartFigure();
+                glyph.AddBezier(
+                    Point(bounds, 0.500F, 0.148F),
+                    Point(bounds, 0.500F, 0.343F),
+                    Point(bounds, 0.657F, 0.500F),
+                    Point(bounds, 0.852F, 0.500F));
+                glyph.AddBezier(
+                    Point(bounds, 0.852F, 0.500F),
+                    Point(bounds, 0.657F, 0.500F),
+                    Point(bounds, 0.500F, 0.657F),
+                    Point(bounds, 0.500F, 0.852F));
+                glyph.AddBezier(
+                    Point(bounds, 0.500F, 0.852F),
+                    Point(bounds, 0.500F, 0.657F),
+                    Point(bounds, 0.343F, 0.500F),
+                    Point(bounds, 0.148F, 0.500F));
+                glyph.AddBezier(
+                    Point(bounds, 0.148F, 0.500F),
+                    Point(bounds, 0.343F, 0.500F),
+                    Point(bounds, 0.500F, 0.343F),
+                    Point(bounds, 0.500F, 0.148F));
+                glyph.CloseFigure();
 
-                using (Pen outlinePen = CreatePen(color, strokeWidth))
+                glyph.StartFigure();
+                glyph.AddBezier(
+                    Point(bounds, 0.463F, 0.398F),
+                    Point(bounds, 0.444F, 0.389F),
+                    Point(bounds, 0.426F, 0.407F),
+                    Point(bounds, 0.426F, 0.435F));
+                glyph.AddLine(Point(bounds, 0.426F, 0.435F), Point(bounds, 0.426F, 0.565F));
+                glyph.AddBezier(
+                    Point(bounds, 0.426F, 0.565F),
+                    Point(bounds, 0.426F, 0.593F),
+                    Point(bounds, 0.454F, 0.611F),
+                    Point(bounds, 0.481F, 0.593F));
+                glyph.AddLine(Point(bounds, 0.481F, 0.593F), Point(bounds, 0.620F, 0.528F));
+                glyph.AddBezier(
+                    Point(bounds, 0.620F, 0.528F),
+                    Point(bounds, 0.648F, 0.509F),
+                    Point(bounds, 0.648F, 0.491F),
+                    Point(bounds, 0.620F, 0.472F));
+                glyph.CloseFigure();
+
+                using (Brush brush = new SolidBrush(color))
                 {
-                    graphics.DrawPath(outlinePen, outline);
+                    graphics.FillPath(brush, glyph);
                 }
             }
-
-            using (Pen markPen = CreatePen(Color.FromArgb(255, color.R, color.G, color.B), markStrokeWidth))
-            {
-                graphics.DrawLine(markPen, Point(bounds, 0.36F, 0.29F), Point(bounds, 0.30F, 0.72F));
-                graphics.DrawLine(markPen, Point(bounds, 0.70F, 0.28F), Point(bounds, 0.64F, 0.71F));
-                graphics.DrawLine(markPen, Point(bounds, 0.33F, 0.52F), Point(bounds, 0.67F, 0.48F));
-            }
-        }
-
-        private static Pen CreatePen(Color color, float width)
-        {
-            Pen pen = new Pen(color, width);
-            pen.StartCap = LineCap.Round;
-            pen.EndCap = LineCap.Round;
-            pen.LineJoin = LineJoin.Round;
-            return pen;
         }
 
         private static PointF Point(RectangleF bounds, float x, float y)

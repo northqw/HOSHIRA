@@ -157,6 +157,7 @@ internal class NativeDesktopPlayerPanel(
     private var firstFrameLogged = false
     private var seeking = false
     private var lastPlaybackNotificationNanos = 0L
+    private var lastPlaybackUiUpdateNanos = 0L
 
     private val awtTitleLabel = EllipsizedLabel(MAX_TITLE_CHARACTERS)
     private val awtSubtitleLabel = JLabel()
@@ -1270,12 +1271,18 @@ internal class NativeDesktopPlayerPanel(
         parameters: SnapshotParameters,
     ) {
         if (disposed.get()) return
+        if (mediaPlayer?.status != MediaPlayer.Status.PLAYING) return
         val image = snapshotImage ?: return
         val buffers = snapshotBuffers ?: return
-        val targetIndex = buffers.indices
-            .map { (snapshotWriteIndex + it) % buffers.size }
-            .firstOrNull { index -> !videoSurface.isFrameInUse(buffers[index]) }
-            ?: return
+        var targetIndex = -1
+        for (offset in buffers.indices) {
+            val candidateIndex = (snapshotWriteIndex + offset) % buffers.size
+            if (!videoSurface.isFrameInUse(buffers[candidateIndex])) {
+                targetIndex = candidateIndex
+                break
+            }
+        }
+        if (targetIndex < 0) return
         val target = buffers[targetIndex]
         try {
             video.snapshot(parameters, image)
@@ -1419,6 +1426,9 @@ internal class NativeDesktopPlayerPanel(
 
     private fun updatePlaybackPosition() {
         val player = mediaPlayer ?: return
+        val now = System.nanoTime()
+        if (now - lastPlaybackUiUpdateNanos < PLAYBACK_UI_UPDATE_NANOS) return
+        lastPlaybackUiUpdateNanos = now
         val position = player.currentTime.safeSeconds()
         val duration = player.totalDuration.safeSeconds()
         if (!seeking && duration > 0.0) {
@@ -1432,7 +1442,6 @@ internal class NativeDesktopPlayerPanel(
             }
             awtElapsedLabel.text = "${position.clockText()} / ${duration.clockText()}"
         }
-        val now = System.nanoTime()
         if (now - lastPlaybackNotificationNanos >= PLAYBACK_NOTIFICATION_NANOS) {
             lastPlaybackNotificationNanos = now
             emitPlayback()
@@ -2128,7 +2137,28 @@ private class HoshiraComboBoxUi : BasicComboBoxUI() {
     }
 
     override fun createPopup(): ComboPopup {
-        val popup = super.createPopup()
+        val popup = object : BasicComboPopup(comboBox) {
+            override fun computePopupBounds(
+                px: Int,
+                py: Int,
+                pw: Int,
+                ph: Int,
+            ): java.awt.Rectangle {
+                val renderer = list.cellRenderer
+                val widestCell = (0 until list.model.size).maxOfOrNull { index ->
+                    renderer.getListCellRendererComponent(
+                        list,
+                        list.model.getElementAt(index),
+                        index,
+                        false,
+                        false,
+                    ).preferredSize.width
+                } ?: 0
+                val popupWidth = maxOf(pw, widestCell + POPUP_HORIZONTAL_PADDING)
+                    .coerceAtMost(MAX_SOURCE_POPUP_WIDTH)
+                return super.computePopupBounds(px, py, popupWidth, ph)
+            }
+        }
         (popup as? BasicComboPopup)?.apply {
             isOpaque = true
             background = AWT_CONTROL_HIGH
@@ -2354,13 +2384,16 @@ private fun hoshiraFont(style: Int, size: Float): Font =
         .deriveFont(Font.PLAIN, size)
 
 private const val SEEK_RANGE = 1_000.0
-private const val CAPTURE_WIDTH = 1_024
-private const val CAPTURE_HEIGHT = 576
-private const val CAPTURE_OPTIMAL_WIDTH = 1_024
+private const val CAPTURE_WIDTH = 960
+private const val CAPTURE_HEIGHT = 540
+private const val CAPTURE_OPTIMAL_WIDTH = 960
 private const val MIN_CAPTURE_WIDTH = 640
 private const val MIN_CAPTURE_HEIGHT = 360
-private const val FRAME_CAPTURE_INTERVAL_MS = 1_000.0 / 23.976
+private const val FRAME_CAPTURE_INTERVAL_MS = 1_000.0 / 24.0
+private const val PLAYBACK_UI_UPDATE_NANOS = 100_000_000L
 private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
+private const val POPUP_HORIZONTAL_PADDING = 28
+private const val MAX_SOURCE_POPUP_WIDTH = 420
 private const val LOADER_DIAMETER = 38
 private const val LOADER_STROKE = 3
 private const val SLIDER_POINTER_PADDING = 7

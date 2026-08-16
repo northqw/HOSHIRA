@@ -36,7 +36,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,6 +50,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -65,6 +68,7 @@ import coil3.compose.AsyncImage
 import dev.aniliberty.desktop.data.CatalogFilters
 import dev.aniliberty.desktop.data.CatalogSort
 import dev.aniliberty.desktop.model.ReleaseDto
+import kotlinx.coroutines.delay
 
 @Composable
 @OptIn(ExperimentalComposeUiApi::class)
@@ -1007,6 +1011,16 @@ fun RemoteImage(
     contentScale: ContentScale = ContentScale.Crop,
     filterQuality: FilterQuality = FilterQuality.High,
 ) {
+    var retryAttempt by remember(url) { mutableStateOf(0) }
+    var failedAttempt by remember(url) { mutableStateOf(-1) }
+
+    LaunchedEffect(url, failedAttempt) {
+        if (url != null && failedAttempt == retryAttempt && retryAttempt < IMAGE_RETRY_DELAYS_MS.size) {
+            delay(IMAGE_RETRY_DELAYS_MS[retryAttempt])
+            retryAttempt++
+        }
+    }
+
     Box(
         modifier = modifier.background(
             Brush.linearGradient(
@@ -1016,13 +1030,20 @@ fun RemoteImage(
         contentAlignment = Alignment.Center,
     ) {
         if (url != null) {
-            AsyncImage(
-                model = url,
-                contentDescription = contentDescription,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale,
-                filterQuality = filterQuality,
-            )
+            key(url, retryAttempt) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = contentScale,
+                    filterQuality = filterQuality,
+                    onError = {
+                        if (retryAttempt < IMAGE_RETRY_DELAYS_MS.size) {
+                            failedAttempt = retryAttempt
+                        }
+                    },
+                )
+            }
         } else {
             Text(
                 "H",
@@ -1033,6 +1054,8 @@ fun RemoteImage(
         }
     }
 }
+
+private val IMAGE_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_500L, 5_000L)
 
 @Composable
 fun LoadingState(
@@ -1175,43 +1198,25 @@ fun BrandMark(modifier: Modifier = Modifier) {
 @Composable
 fun BrandGlyph(modifier: Modifier = Modifier) {
     Canvas(modifier) {
-        val width = size.width
-        val height = size.height
-        val strokeWidth = size.minDimension * 0.065f
-        val outline = Path().apply {
-            moveTo(width * 0.50f, height * 0.05f)
-            lineTo(width * 0.84f, height * 0.24f)
-            lineTo(width * 0.84f, height * 0.76f)
-            lineTo(width * 0.50f, height * 0.95f)
-            lineTo(width * 0.16f, height * 0.76f)
-            lineTo(width * 0.16f, height * 0.24f)
+        fun x(value: Float) = size.width * value / 108f
+        fun y(value: Float) = size.height * value / 108f
+        val star = Path().apply {
+            fillType = PathFillType.EvenOdd
+            moveTo(x(54f), y(16f))
+            cubicTo(x(54f), y(37f), x(71f), y(54f), x(92f), y(54f))
+            cubicTo(x(71f), y(54f), x(54f), y(71f), x(54f), y(92f))
+            cubicTo(x(54f), y(71f), x(37f), y(54f), x(16f), y(54f))
+            cubicTo(x(37f), y(54f), x(54f), y(37f), x(54f), y(16f))
+            close()
+
+            moveTo(x(50f), y(43f))
+            cubicTo(x(48f), y(42f), x(46f), y(44f), x(46f), y(47f))
+            lineTo(x(46f), y(61f))
+            cubicTo(x(46f), y(64f), x(49f), y(66f), x(52f), y(64f))
+            lineTo(x(67f), y(57f))
+            cubicTo(x(70f), y(55f), x(70f), y(53f), x(67f), y(51f))
             close()
         }
-        drawPath(
-            path = outline,
-            color = Color.White.copy(alpha = 0.92f),
-            style = Stroke(width = strokeWidth),
-        )
-        drawLine(
-            color = Color.White,
-            start = androidx.compose.ui.geometry.Offset(width * 0.36f, height * 0.29f),
-            end = androidx.compose.ui.geometry.Offset(width * 0.30f, height * 0.72f),
-            strokeWidth = strokeWidth * 1.22f,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = Color.White,
-            start = androidx.compose.ui.geometry.Offset(width * 0.70f, height * 0.28f),
-            end = androidx.compose.ui.geometry.Offset(width * 0.64f, height * 0.71f),
-            strokeWidth = strokeWidth * 1.22f,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = Color.White,
-            start = androidx.compose.ui.geometry.Offset(width * 0.33f, height * 0.52f),
-            end = androidx.compose.ui.geometry.Offset(width * 0.67f, height * 0.48f),
-            strokeWidth = strokeWidth * 1.22f,
-            cap = StrokeCap.Round,
-        )
+        drawPath(path = star, color = Color(0xFFFF641A))
     }
 }

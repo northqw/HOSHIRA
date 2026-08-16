@@ -11,7 +11,7 @@
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.3.0-ff4e00?style=flat-square" alt="Version 0.3.0">
+    <img src="https://img.shields.io/badge/version-0.4.0-ff4e00?style=flat-square" alt="Version 0.4.0">
     <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
     <img src="https://img.shields.io/badge/Linux-experimental-111318?style=flat-square&logo=linux" alt="Linux experimental">
     <img src="https://img.shields.io/badge/Android%20beta-in%20development-3ddc84?style=flat-square&logo=android&logoColor=white" alt="Android beta in development">
@@ -48,7 +48,7 @@ Hoshira — независимое desktop-приложение с фокусо�
 | Каталог | Бесконечная подгрузка, фильтры и сортировка |
 | Поиск | Поиск по каталогу с задержкой ввода и обработкой ошибок |
 | Страница аниме | Баннер, метаданные, жанры, студии озвучки и эпизоды |
-| Плеер | Нативный HLS на Windows, WebKitGTK на Linux, выбор источника и собственные элементы управления |
+| Плеер | Нативный HLS на Windows и Android (Media3), WebKitGTK на Linux, выбор источника и собственные элементы управления |
 | Аккаунт | Авторизация YummyAnime, избранное и пользовательские списки |
 | Desktop UX | Кэш изображений, тёмное окно, загрузочные экраны и фирменный установщик |
 
@@ -108,6 +108,7 @@ third_party/              # тексты лицензий сторонних к�
 - Kotlin Coroutines и Serialization;
 - Coil 3 для изображений и дискового кэша;
 - JNA для системной интеграции и JavaFX Media для HLS на Windows;
+- AndroidX Media3/ExoPlayer для нативного HLS на Android;
 - Eclipse SWT, WebKitGTK и GStreamer для экспериментального Linux-плеера;
 - Gradle Wrapper;
 - WiX/jpackage и собственная C#-оболочка установщика.

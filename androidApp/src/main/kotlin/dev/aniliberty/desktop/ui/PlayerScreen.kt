@@ -1,41 +1,44 @@
 package dev.aniliberty.desktop.ui
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Color as AndroidColor
-import android.media.AudioManager
-import android.net.Uri
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
+import android.graphics.Matrix
 import android.os.SystemClock
 import android.util.Log
-import android.view.View
-import android.webkit.ConsoleMessage
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.view.TextureView
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
+import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -43,17 +46,44 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import dev.aniliberty.android.BuildConfig
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import dev.aniliberty.desktop.PlaybackSession
+import dev.aniliberty.desktop.data.HlsStreamResolver
+import dev.aniliberty.desktop.data.PlaybackSource
 import dev.aniliberty.desktop.data.PlayerPreferences
 import dev.aniliberty.desktop.model.EpisodeDto
-import java.io.ByteArrayInputStream
-import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
+@OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
     session: PlaybackSession?,
@@ -76,15 +106,14 @@ fun PlayerScreen(
         return
     }
 
-    val currentBack by rememberUpdatedState(onBack)
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val currentPlayback by rememberUpdatedState(onPlayback)
-    val currentFullscreenChange by rememberUpdatedState(onFullscreenChange)
     val currentPlayEpisode by rememberUpdatedState(onPlayEpisode)
-    val studioEpisodes = remember(
-        session.release.id,
-        session.episode.name,
-        session.episode.displayPlayerName,
-    ) {
+    val currentFullscreenChange by rememberUpdatedState(onFullscreenChange)
+    val currentAutoplayNext by rememberUpdatedState(preferences.autoplayNext)
+
+    val studioEpisodes = remember(session.release.id, session.episode.name, session.episode.displayPlayerName) {
         session.release.episodes
             .filter {
                 it.name == session.episode.name &&
@@ -94,11 +123,7 @@ fun PlayerScreen(
             .sortedBy(EpisodeDto::ordinal)
             .distinctBy(EpisodeDto::displayOrdinal)
     }
-    val sourceCandidates = remember(
-        session.release.id,
-        session.episode.name,
-        session.episode.displayOrdinal,
-    ) {
+    val sourceCandidates = remember(session.release.id, session.episode.name, session.episode.displayOrdinal) {
         session.release.episodes
             .filter {
                 it.name == session.episode.name &&
@@ -108,620 +133,706 @@ fun PlayerScreen(
             .distinctBy(EpisodeDto::displayPlayerName)
             .sortedBy(EpisodeDto::displayPlayerName)
     }
-    val currentIndex = studioEpisodes
-        .indexOfFirst { it.id == session.episode.id }
-        .takeIf { it >= 0 }
-        ?: 0
+    val resolver = remember { HlsStreamResolver { message -> Log.d(PLAYER_DEBUG_TAG, message) } }
+    val visibleSources = remember(sourceCandidates) {
+        sourceCandidates.filter { episode ->
+            resolver.supports(episode.externalPlayerUrl) || episode.isDeferredAlloha()
+        }
+    }
+    val currentIndex = studioEpisodes.indexOfFirst { it.id == session.episode.id }
+        .takeIf { it >= 0 } ?: 0
     val previousEpisode = studioEpisodes.getOrNull(currentIndex - 1)
     val nextEpisode = studioEpisodes.getOrNull(currentIndex + 1)
-    val currentPreviousEpisode by rememberUpdatedState(previousEpisode)
     val currentNextEpisode by rememberUpdatedState(nextEpisode)
-    val currentSourceCandidates by rememberUpdatedState(sourceCandidates)
-    val currentAutoplayNext by rememberUpdatedState(preferences.autoplayNext)
-    val initialStartupVolume = remember(session.episode.id) { preferences.startupVolume }
-    val initialPreferredQuality = remember(session.episode.id) { preferredQuality }
-    var hasLoadedProvider by remember(playerUrl) { mutableStateOf(false) }
-    val hostConfig = AndroidPlayerHostConfig(
-        playerUrl = playerUrl,
-        title = session.release.displayName,
-        subtitle = listOfNotNull(session.episode.shortTitle, session.episode.name)
-            .joinToString(" · "),
-        position = "${currentIndex + 1} из ${studioEpisodes.size.coerceAtLeast(1)}",
-        sources = sourceCandidates.map { source ->
-            AndroidPlayerHostSource(
-                episodeId = source.id,
-                label = source.displayPlayerName,
-                selected = source.id == session.episode.id,
-                enabled = !source.displayPlayerName.contains("Alloha", ignoreCase = true),
-            )
-        },
-        resumeSeconds = session.resumeSeconds,
-        startupVolume = initialStartupVolume,
-        preferredQuality = initialPreferredQuality,
-        hasPrevious = previousEpisode != null,
-        hasNext = nextEpisode != null,
-        controlsHideDelayMs = preferences.controlsHideDelayMs,
-        showLoading = !hasLoadedProvider,
-    )
 
-    var loading by remember(playerUrl) { mutableStateOf(true) }
-    var error by remember(playerUrl) { mutableStateOf<String?>(null) }
-    var playerDetected by remember(playerUrl) { mutableStateOf(false) }
+    val player = remember(context) { createNativeHlsPlayer(context.applicationContext) }
+    var resolvedSource by remember(playerUrl) { mutableStateOf<PlaybackSource.DirectMedia?>(null) }
+    var resolving by remember { mutableStateOf(true) }
+    var buffering by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var retryKey by remember(playerUrl) { mutableLongStateOf(0L) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var sourceMenuExpanded by remember { mutableStateOf(false) }
+    var qualityMenuExpanded by remember { mutableStateOf(false) }
+    var selectedQualityOverride by remember(playerUrl) { mutableStateOf(preferredQuality) }
+    var pendingResumeSeconds by remember(playerUrl) { mutableStateOf<Double?>(null) }
+    var positionMs by remember(playerUrl) { mutableLongStateOf(0L) }
+    var durationMs by remember(playerUrl) { mutableLongStateOf(0L) }
+    var seekFraction by remember(playerUrl) { mutableFloatStateOf(0f) }
+    var seeking by remember(playerUrl) { mutableStateOf(false) }
+    var volume by remember { mutableFloatStateOf(preferences.startupVolume.coerceIn(0f, 1f)) }
+    var playerWidth by remember { mutableFloatStateOf(1f) }
+    var playerHeight by remember { mutableFloatStateOf(1f) }
+    var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
+    val currentResolvedSource by rememberUpdatedState(resolvedSource)
     val debugStartedAt = remember(playerUrl) { SystemClock.elapsedRealtime() }
-    val addDebugEvent: (String) -> Unit = { message ->
-        val elapsed = SystemClock.elapsedRealtime() - debugStartedAt
-        val entry = "+${elapsed}ms ${message.take(DEBUG_EVENT_MAX_LENGTH)}"
-        Log.d(PLAYER_DEBUG_TAG, entry)
-    }
-    val webViewHolder = remember { arrayOfNulls<WebView>(1) }
-    val chromeHolder = remember { arrayOfNulls<AndroidPlayerChromeClient>(1) }
-    val webViewPackage = remember {
-        WebView.getCurrentWebViewPackage()?.let { info ->
-            "${info.packageName} ${info.versionName.orEmpty()}".trim()
-        } ?: "не определён"
-    }
-    BackHandler {
-        currentBack()
+    fun debug(message: String) {
+        Log.d(PLAYER_DEBUG_TAG, "+${SystemClock.elapsedRealtime() - debugStartedAt}ms $message")
     }
 
-    LaunchedEffect(playerUrl) {
-        addDebugEvent("app-build=$ANDROID_BUILD_LABEL; player-host=$PLAYER_HOST_VERSION")
-        addDebugEvent("open ${sanitizeUrl(playerUrl)}")
-        addDebugEvent(
-            "episode=${session.episode.displayOrdinal}; " +
-                "dubbing=${session.episode.name.orEmpty().ifBlank { "—" }}; " +
-                "source=${session.episode.displayPlayerName}",
-        )
-        addDebugEvent("WebView package=$webViewPackage")
-        if (!isFullscreen) {
-            currentFullscreenChange(true)
+    BackHandler(onBack = onBack)
+
+    LaunchedEffect(Unit) {
+        if (!isFullscreen) currentFullscreenChange(true)
+    }
+
+    LaunchedEffect(playerUrl, selectedQualityOverride, retryKey) {
+        val resumeSeconds = pendingResumeSeconds ?: session.resumeSeconds
+        resolving = true
+        buffering = false
+        error = null
+        controlsVisible = true
+        videoAspectRatio = 16f / 9f
+        resolvedSource = null
+        player.stop()
+        player.clearMediaItems()
+        val result = withContext(Dispatchers.IO) {
+            resolveAndroidHls(
+                resolver = resolver,
+                primaryUrl = playerUrl,
+                fallbackEpisodes = sourceCandidates,
+                preferredVoice = session.episode.name,
+                preferredQuality = selectedQualityOverride,
+                debug = ::debug,
+            )
         }
-        delay(PLAYER_DIAGNOSTIC_TIMEOUT_MS)
-        if (!playerDetected) {
-            loading = false
-            addDebugEvent("TIMEOUT: HTML5 video не обнаружено")
-            webViewHolder[0]?.let { webView ->
-                webView.evaluateJavascript(PLAYER_DIAGNOSTIC_SCRIPT, null)
+        result.onSuccess { source ->
+            resolvedSource = source
+            player.volume = volume
+            player.setMediaSource(source.toAndroidMediaSource())
+            player.seekTo((resumeSeconds * 1_000.0).toLong().coerceAtLeast(0L))
+            player.prepare()
+            player.playWhenReady = true
+            pendingResumeSeconds = null
+            debug("native media prepared quality=${source.quality ?: "adaptive"}")
+        }.onFailure { cause ->
+            resolving = false
+            error = cause.message ?: "Не удалось загрузить эпизод."
+            debug("HLS resolution failed: ${cause.javaClass.simpleName}: ${cause.message}")
+        }
+    }
+
+    DisposableEffect(player, lifecycleOwner) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) {
+                    resolving = false
+                    error = null
+                }
+                if (playbackState == Player.STATE_ENDED && currentAutoplayNext) {
+                    currentNextEpisode?.let(currentPlayEpisode)
+                }
+            }
+
+            override fun onIsPlayingChanged(value: Boolean) {
+                isPlaying = value
+                if (value) controlsVisible = true
+            }
+
+            override fun onPlayerError(playerError: PlaybackException) {
+                resolving = false
+                buffering = false
+                error = "Поток прервался. Проверьте подключение и попробуйте снова."
+                debug("player error=${playerError.errorCodeName}: ${playerError.message}")
+            }
+
+            override fun onVolumeChanged(value: Float) {
+                volume = value.coerceIn(0f, 1f)
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspectRatio =
+                        (videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height)
+                            .coerceAtLeast(0.01f)
+                }
+                debug("video=${videoSize.width}x${videoSize.height} ratio=${videoSize.pixelWidthHeightRatio}")
+            }
+
+            override fun onRenderedFirstFrame() {
+                resolving = false
+                buffering = false
+                debug("first native frame rendered")
             }
         }
-    }
-
-    DisposableEffect(Unit) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) player.pause()
+        }
+        player.addListener(listener)
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            chromeHolder[0]?.closeCustomView()
-            webViewHolder[0]?.apply {
-                stopLoading()
-                loadUrl("about:blank")
-                removeJavascriptInterface(JS_BRIDGE_NAME)
-                destroy()
-            }
-            webViewHolder[0] = null
+            val duration = player.safeDuration()
+            currentPlayback(
+                player.currentPosition.coerceAtLeast(0L) / 1_000.0,
+                duration / 1_000.0,
+                player.volume,
+                currentResolvedSource?.quality,
+            )
+            player.removeListener(listener)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            player.release()
             currentFullscreenChange(false)
         }
     }
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
+    LaunchedEffect(player, resolvedSource) {
+        while (true) {
+            positionMs = player.currentPosition.coerceAtLeast(0L)
+            durationMs = player.safeDuration()
+            if (!seeking) {
+                seekFraction = if (durationMs > 0L) {
+                    (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+            }
+            delay(250L)
+        }
+    }
+
+    LaunchedEffect(player, resolvedSource) {
+        while (true) {
+            delay(1_000L)
+            val duration = player.safeDuration()
+            if (resolvedSource != null && duration > 0L) {
+                currentPlayback(
+                    player.currentPosition.coerceAtLeast(0L) / 1_000.0,
+                    duration / 1_000.0,
+                    player.volume,
+                    resolvedSource?.quality,
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(controlsVisible, isPlaying, sourceMenuExpanded, qualityMenuExpanded, preferences.controlsHideDelayMs) {
+        if (controlsVisible && isPlaying && !sourceMenuExpanded && !qualityMenuExpanded) {
+            delay(preferences.controlsHideDelayMs.coerceAtLeast(1_200).toLong())
+            controlsVisible = false
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onSizeChanged {
+                playerWidth = it.width.coerceAtLeast(1).toFloat()
+                playerHeight = it.height.coerceAtLeast(1).toFloat()
+            }
+            .pointerInput(player, playerWidth) {
+                detectTapGestures(
+                    onTap = { controlsVisible = !controlsVisible },
+                    onDoubleTap = { offset ->
+                        val delta = when {
+                            offset.x < playerWidth * 0.38f -> -10_000L
+                            offset.x > playerWidth * 0.62f -> 10_000L
+                            else -> 0L
+                        }
+                        if (delta == 0L) {
+                            if (player.isPlaying) player.pause() else player.play()
+                        } else {
+                            player.seekTo(
+                                (player.currentPosition + delta)
+                                    .coerceIn(0L, player.safeDuration().takeIf { it > 0L } ?: Long.MAX_VALUE),
+                            )
+                        }
+                        controlsVisible = true
+                    },
+                )
+            },
+    ) {
         AndroidView(
-            factory = { context ->
-                createPlayerWebView(
-                    context = context,
-                    hostConfig = hostConfig,
-                    onReady = {
-                        loading = false
-                        error = null
-                    },
-                    onError = { message ->
-                        loading = false
-                        error = message
-                    },
-                    onDebug = addDebugEvent,
-                    onPlayerDetected = { details ->
-                        if (!playerDetected) {
-                            addDebugEvent("PLAYER DETECTED: $details")
-                        }
-                        playerDetected = true
-                        loading = false
-                    },
-                    onProgress = {},
-                    onMetrics = {},
-                    onPlayback = currentPlayback,
-                    onEnded = {
-                        if (currentAutoplayNext) {
-                            currentNextEpisode?.let(currentPlayEpisode)
-                        }
-                    },
-                    onHostAction = { action, value ->
-                        when (action) {
-                            "provider-loaded" -> {
-                                hasLoadedProvider = true
-                                loading = false
-                            }
-                            "provider-error" -> {
-                                loading = false
-                                error = "Источник сообщил: контент не найден. Попробуйте другой плеер."
-                                addDebugEvent("provider-content-error ${value.take(160)}")
-                            }
-                            "back" -> currentBack()
-                            "previous" -> currentPreviousEpisode?.let(currentPlayEpisode)
-                            "next" -> currentNextEpisode?.let(currentPlayEpisode)
-                            "source" -> currentSourceCandidates
-                                .firstOrNull { it.id == value }
-                                ?.let(currentPlayEpisode)
-                        }
-                    },
-                    onFullscreenChange = currentFullscreenChange,
-                ).also { webView ->
-                    webViewHolder[0] = webView
-                    chromeHolder[0] = webView.webChromeClient as? AndroidPlayerChromeClient
-                    loadPlayerHost(
-                        webView = webView,
-                        hostConfig = hostConfig,
-                        onDebug = addDebugEvent,
+            factory = { playerContext ->
+                TextureView(playerContext).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
                     )
+                    keepScreenOn = true
+                    player.setVideoTextureView(this)
                 }
             },
-            update = { webView ->
-                val webViewState = webView.tag as? PlayerWebViewState
-                if (webViewState?.url != playerUrl) {
-                    loading = true
-                    error = null
-                    playerDetected = false
-                    addDebugEvent("reload ${sanitizeUrl(playerUrl)}")
-                    loadPlayerHost(
-                        webView = webView,
-                        hostConfig = hostConfig,
-                        onDebug = addDebugEvent,
-                    )
-                }
+            update = { textureView ->
+                textureView.applyAspectFitTransform(
+                    videoAspectRatio = videoAspectRatio,
+                    viewWidth = playerWidth,
+                    viewHeight = playerHeight,
+                )
+            },
+            onRelease = { textureView ->
+                player.clearVideoTextureView(textureView)
             },
             modifier = Modifier.fillMaxSize(),
         )
 
-        if (loading) {
+        if (controlsVisible) {
+            PlayerChrome(
+                title = session.release.displayName,
+                subtitle = listOfNotNull(session.episode.shortTitle, session.episode.name)
+                    .joinToString(" · "),
+                positionLabel = "${currentIndex + 1} из ${studioEpisodes.size.coerceAtLeast(1)}",
+                sources = visibleSources,
+                selectedEpisodeId = session.episode.id,
+                sourceMenuExpanded = sourceMenuExpanded,
+                onSourceMenuExpandedChange = { sourceMenuExpanded = it },
+                onSourceSelected = currentPlayEpisode,
+                onBack = onBack,
+                isPlaying = isPlaying,
+                onTogglePlayback = { if (player.isPlaying) player.pause() else player.play() },
+                onSeekBy = { delta ->
+                    player.seekTo(
+                        (player.currentPosition + delta)
+                            .coerceIn(0L, player.safeDuration().takeIf { it > 0L } ?: Long.MAX_VALUE),
+                    )
+                },
+                seekFraction = seekFraction,
+                onSeekFractionChange = {
+                    seeking = true
+                    seekFraction = it
+                },
+                onSeekFinished = {
+                    if (durationMs > 0L) player.seekTo((durationMs * seekFraction).toLong())
+                    seeking = false
+                },
+                elapsed = "${positionMs.clockText()} / ${durationMs.clockText()}",
+                quality = resolvedSource?.quality ?: "Авто",
+                qualities = resolvedSource?.availableQualities.orEmpty(),
+                qualityMenuExpanded = qualityMenuExpanded,
+                onQualityMenuExpandedChange = { qualityMenuExpanded = it },
+                onQualitySelected = { selectedQuality ->
+                    if (selectedQuality != resolvedSource?.quality) {
+                        pendingResumeSeconds = player.currentPosition.coerceAtLeast(0L) / 1_000.0
+                        selectedQualityOverride = selectedQuality
+                    }
+                },
+                previousEpisode = previousEpisode,
+                nextEpisode = nextEpisode,
+                onPlayEpisode = currentPlayEpisode,
+                isLoading = resolving || buffering,
+            )
+        }
+
+        if (resolving || buffering) {
             Column(
                 modifier = Modifier.align(Alignment.Center),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CircularProgressIndicator(color = AniColors.Orange)
-                Spacer(Modifier.size(14.dp))
-                Text("Загружаем плеер…", color = AniColors.TextMuted)
+                CircularProgressIndicator(color = AniColors.OrangeBright)
+                Text(
+                    text = "Загрузка эпизода",
+                    color = AniColors.TextMuted,
+                    modifier = Modifier.padding(top = 14.dp),
+                )
             }
         }
 
         error?.let { message ->
-            Box(
-                Modifier
+            Surface(
+                modifier = Modifier
                     .align(Alignment.Center)
-                    .padding(28.dp)
-                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
-                    .background(AniColors.Surface.copy(alpha = 0.96f))
-                    .padding(22.dp),
+                    .widthIn(max = 520.dp)
+                    .padding(24.dp),
+                color = AniColors.Surface.copy(alpha = 0.96f),
+                shape = RoundedCornerShape(22.dp),
             ) {
-                Text(message, color = AniColors.Text)
-            }
-        }
-
-    }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-private fun createPlayerWebView(
-    context: Context,
-    hostConfig: AndroidPlayerHostConfig,
-    onReady: () -> Unit,
-    onError: (String) -> Unit,
-    onDebug: (String) -> Unit,
-    onPlayerDetected: (String) -> Unit,
-    onProgress: (Int) -> Unit,
-    onMetrics: (String) -> Unit,
-    onPlayback: (Double, Double, Float, String?) -> Unit,
-    onEnded: () -> Unit,
-    onHostAction: (String, String) -> Unit,
-    onFullscreenChange: (Boolean) -> Unit,
-): WebView {
-    WebView.setWebContentsDebuggingEnabled(true)
-    return WebView(context).apply {
-        onDebug("WebView created")
-        setBackgroundColor(AndroidColor.BLACK)
-        setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            mediaPlaybackRequiresUserGesture = false
-            allowFileAccess = false
-            allowContentAccess = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            cacheMode = WebSettings.LOAD_DEFAULT
-            useWideViewPort = false
-            loadWithOverviewMode = false
-            textZoom = 100
-            builtInZoomControls = false
-            displayZoomControls = false
-            setSupportMultipleWindows(false)
-        }
-        setInitialScale(100)
-        overScrollMode = View.OVER_SCROLL_NEVER
-        val playerWebView = this
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(playerWebView, true)
-        }
-        addJavascriptInterface(
-            AndroidPlayerBridge(
-                context = context.applicationContext,
-                onPlayback = onPlayback,
-                onEnded = onEnded,
-                onDebug = onDebug,
-                onPlayerDetected = onPlayerDetected,
-                onHostAction = onHostAction,
-            ),
-            JS_BRIDGE_NAME,
-        )
-        webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                super.onPageStarted(view, url, favicon)
-                if (url != "about:blank") {
-                    onDebug("page-started ${sanitizeUrl(url)}")
-                    onMetrics(collectWebViewMetrics(view))
-                }
-            }
-
-            override fun onPageFinished(view: WebView, url: String) {
-                super.onPageFinished(view, url)
-                if (url != "about:blank") {
-                    onDebug("page-finished ${sanitizeUrl(url)}")
-                    view.evaluateJavascript(PLAYER_DIAGNOSTIC_SCRIPT, null)
-                    onMetrics(collectWebViewMetrics(view))
-                    onReady()
-                }
-            }
-
-            override fun onPageCommitVisible(view: WebView, url: String) {
-                super.onPageCommitVisible(view, url)
-                if (url != "about:blank") {
-                    onDebug("page-commit-visible ${sanitizeUrl(url)}")
-                    view.evaluateJavascript(PLAYER_DIAGNOSTIC_SCRIPT, null)
-                    onMetrics(collectWebViewMetrics(view))
-                    onReady()
-                }
-            }
-
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                request: WebResourceRequest,
-            ): Boolean {
-                if (!request.isForMainFrame) return false
-                val blocked = !isAllowedPlayerNavigation(request.url)
-                onDebug(
-                    "${if (blocked) "navigation-blocked" else "navigation-allowed"} " +
-                        sanitizeUrl(request.url.toString()),
-                )
-                return blocked
-            }
-
-            override fun shouldInterceptRequest(
-                view: WebView,
-                request: WebResourceRequest,
-            ): WebResourceResponse? {
-                if (request.url.path == HOSHIRA_PLAYER_FONT_PATH) {
-                    return WebResourceResponse(
-                        "font/ttf",
-                        null,
-                        200,
-                        "OK",
-                        mapOf(
-                            "Access-Control-Allow-Origin" to "*",
-                            "Cache-Control" to "public, max-age=86400",
-                        ),
-                        context.resources.openRawResource(
-                            dev.aniliberty.android.R.font.montserrat_semibold,
-                        ),
-                    )
-                }
-                if (
-                    isKodikProviderUrl(
-                        (view.tag as? PlayerWebViewState)?.url ?: hostConfig.playerUrl,
-                    ) &&
-                    shouldBlockKodikRequest(request.url.toString())
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    onDebug("blocked Kodik advertising request ${sanitizeUrl(request.url.toString())}")
-                    return WebResourceResponse(
-                        "text/plain",
-                        "utf-8",
-                        204,
-                        "No Content",
-                        mapOf(
-                            "Cache-Control" to "no-store",
-                            "Access-Control-Allow-Origin" to "*",
-                        ),
-                        ByteArrayInputStream(ByteArray(0)),
-                    )
+                    Text(message, color = AniColors.Text, fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = { retryKey++ },
+                        modifier = Modifier.padding(top = 18.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AniColors.Orange),
+                    ) {
+                        Text("Повторить")
+                    }
                 }
-                return super.shouldInterceptRequest(view, request)
-            }
-
-            override fun onReceivedError(
-                view: WebView,
-                request: WebResourceRequest,
-                error: android.webkit.WebResourceError,
-            ) {
-                super.onReceivedError(view, request, error)
-                if (request.isForMainFrame) {
-                    onDebug(
-                        "main-frame-error code=${error.errorCode} " +
-                            "description=${error.description.toString().take(160)} " +
-                            "url=${sanitizeUrl(request.url.toString())}",
-                    )
-                    onMetrics(collectWebViewMetrics(view))
-                    onError("Плеер не загрузился. Проверьте подключение и попробуйте снова.")
-                }
-            }
-
-            override fun onReceivedHttpError(
-                view: WebView,
-                request: WebResourceRequest,
-                errorResponse: WebResourceResponse,
-            ) {
-                super.onReceivedHttpError(view, request, errorResponse)
-                if (request.isForMainFrame) {
-                    onDebug(
-                        "main-frame-http status=${errorResponse.statusCode} " +
-                            "reason=${errorResponse.reasonPhrase.orEmpty().take(120)} " +
-                            "url=${sanitizeUrl(request.url.toString())}",
-                    )
-                    onMetrics(collectWebViewMetrics(view))
-                    onError("Плеер вернул HTTP ${errorResponse.statusCode}. Попробуйте другой источник.")
-                }
-            }
-
-            override fun onRenderProcessGone(
-                view: WebView,
-                detail: RenderProcessGoneDetail,
-            ): Boolean {
-                onDebug(
-                    "RENDERER GONE: crashed=${detail.didCrash()} " +
-                        "priority=${detail.rendererPriorityAtExit()}",
-                )
-                onMetrics(collectWebViewMetrics(view))
-                onError("Процесс Android System WebView завершился. Закройте плеер и попробуйте снова.")
-                return true
             }
         }
-        webChromeClient = AndroidPlayerChromeClient(
-            onFullscreenChange = onFullscreenChange,
-            onDebug = onDebug,
-            onProgress = { progress ->
-                onProgress(progress)
-                onMetrics(collectWebViewMetrics(this))
-            },
+    }
+}
+
+private fun TextureView.applyAspectFitTransform(
+    videoAspectRatio: Float,
+    viewWidth: Float,
+    viewHeight: Float,
+) {
+    if (videoAspectRatio <= 0f || viewWidth <= 0f || viewHeight <= 0f) return
+    val viewAspectRatio = viewWidth / viewHeight
+    val scaleX = if (viewAspectRatio > videoAspectRatio) {
+        videoAspectRatio / viewAspectRatio
+    } else {
+        1f
+    }
+    val scaleY = if (viewAspectRatio < videoAspectRatio) {
+        viewAspectRatio / videoAspectRatio
+    } else {
+        1f
+    }
+    setTransform(
+        Matrix().apply {
+            setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
+        },
+    )
+}
+
+@OptIn(UnstableApi::class)
+private fun createNativeHlsPlayer(context: Context): ExoPlayer {
+    val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            30_000,
+            75_000,
+            2_500,
+            5_000,
+        )
+        .setPrioritizeTimeOverSizeThresholds(true)
+        .build()
+    val renderers = DefaultRenderersFactory(context)
+        .setEnableDecoderFallback(true)
+    return ExoPlayer.Builder(context, renderers)
+        .setLoadControl(loadControl)
+        .build()
+        .apply {
+            setAudioAttributes(AudioAttributes.DEFAULT, true)
+            setHandleAudioBecomingNoisy(true)
+            videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            repeatMode = Player.REPEAT_MODE_OFF
+        }
+}
+
+@OptIn(UnstableApi::class)
+private fun PlaybackSource.DirectMedia.toAndroidMediaSource(): MediaSource {
+    val requestUserAgent = headers["User-Agent"] ?: ANDROID_HLS_USER_AGENT
+    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+        .setUserAgent(requestUserAgent)
+        .setDefaultRequestProperties(headers - "User-Agent")
+    val isHls = url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+    val item = MediaItem.Builder()
+        .setUri(url)
+        .apply {
+            if (isHls) setMimeType(MimeTypes.APPLICATION_M3U8)
+        }
+        .build()
+    return if (isHls) {
+        HlsMediaSource.Factory(httpDataSourceFactory).createMediaSource(item)
+    } else {
+        ProgressiveMediaSource.Factory(httpDataSourceFactory).createMediaSource(item)
+    }
+}
+
+private suspend fun resolveAndroidHls(
+    resolver: HlsStreamResolver,
+    primaryUrl: String,
+    fallbackEpisodes: List<EpisodeDto>,
+    preferredVoice: String?,
+    preferredQuality: String?,
+    debug: (String) -> Unit,
+): Result<PlaybackSource.DirectMedia> = runCatching {
+    var lastError: Throwable? = null
+    val urls = sequenceOf(primaryUrl)
+        .plus(fallbackEpisodes.asSequence().mapNotNull(EpisodeDto::externalPlayerUrl))
+        .distinct()
+        .filter(resolver::supports)
+        .toList()
+    for (url in urls) {
+        try {
+            val provider = resolver.inspect(url).provider
+            debug("resolving ${provider.displayName}")
+            return@runCatching resolver.resolve(
+                url = url,
+                preferredVoice = preferredVoice,
+                preferredQuality = preferredQuality,
+                preferHls = true,
+            )
+        } catch (cause: Throwable) {
+            lastError = cause
+            debug("resolver attempt failed: ${cause.javaClass.simpleName}: ${cause.message}")
+        }
+    }
+    throw lastError ?: IllegalStateException(
+        if (fallbackEpisodes.any(EpisodeDto::isDeferredAlloha)) {
+            "Для этой серии пока доступен только Alloha. Его поддержка появится позже."
+        } else {
+            "Для этой серии не найден доступный источник."
+        },
+    )
+}
+
+@Composable
+private fun PlayerChrome(
+    title: String,
+    subtitle: String,
+    positionLabel: String,
+    sources: List<EpisodeDto>,
+    selectedEpisodeId: String,
+    sourceMenuExpanded: Boolean,
+    onSourceMenuExpandedChange: (Boolean) -> Unit,
+    onSourceSelected: (EpisodeDto) -> Unit,
+    onBack: () -> Unit,
+    isPlaying: Boolean,
+    onTogglePlayback: () -> Unit,
+    onSeekBy: (Long) -> Unit,
+    seekFraction: Float,
+    onSeekFractionChange: (Float) -> Unit,
+    onSeekFinished: () -> Unit,
+    elapsed: String,
+    quality: String,
+    qualities: List<String>,
+    qualityMenuExpanded: Boolean,
+    onQualityMenuExpandedChange: (Boolean) -> Unit,
+    onQualitySelected: (String) -> Unit,
+    previousEpisode: EpisodeDto?,
+    nextEpisode: EpisodeDto?,
+    onPlayEpisode: (EpisodeDto) -> Unit,
+    isLoading: Boolean,
+) {
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.Black.copy(alpha = 0.92f), Color.Transparent),
+                    ),
+                )
+                .padding(horizontal = 22.dp, vertical = 18.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PlayerPill("←  Назад", onBack)
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 18.dp)
+                        .weight(1f),
+                ) {
+                    Text(
+                        title,
+                        color = AniColors.Text,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 18.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOf(subtitle, positionLabel).filter(String::isNotBlank).joinToString(" · "),
+                        color = AniColors.TextMuted,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (sources.isNotEmpty()) {
+                    Box {
+                        PlayerPill(
+                            text = "Источник  ${sources.firstOrNull { it.id == selectedEpisodeId }?.displayPlayerName ?: "Плеер"}  ⌄",
+                            onClick = { onSourceMenuExpandedChange(!sourceMenuExpanded) },
+                        )
+                        DropdownMenu(
+                            expanded = sourceMenuExpanded,
+                            onDismissRequest = { onSourceMenuExpandedChange(false) },
+                            modifier = Modifier.widthIn(min = 310.dp, max = 390.dp),
+                            containerColor = AniColors.SurfaceHigh,
+                        ) {
+                            Text(
+                                "Выберите плеер",
+                                color = AniColors.TextMuted,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            )
+                            sources.forEach { episode ->
+                                val enabled = !episode.isDeferredAlloha()
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(Modifier.fillMaxWidth()) {
+                                            Text(
+                                                episode.displayPlayerName,
+                                                color = if (enabled) AniColors.Text else AniColors.TextMuted,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                            if (!enabled) {
+                                                Text(
+                                                    "Поддержка появится позже",
+                                                    color = AniColors.TextMuted.copy(alpha = 0.72f),
+                                                    fontSize = 11.sp,
+                                                    maxLines = 1,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    enabled = enabled && episode.id != selectedEpisodeId,
+                                    onClick = {
+                                        onSourceMenuExpandedChange(false)
+                                        onSourceSelected(episode)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                }
+            }
+        }
+
+        if (!isLoading) {
+            Row(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PlayerRoundButton("−10", { onSeekBy(-10_000L) }, large = true)
+                PlayerRoundButton(if (isPlaying) "❚❚" else "▶", onTogglePlayback, large = true, accent = true)
+                PlayerRoundButton("+10", { onSeekBy(10_000L) }, large = true)
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.96f)),
+                    ),
+                )
+                .padding(horizontal = 24.dp, vertical = 18.dp),
+        ) {
+            Slider(
+                value = seekFraction,
+                onValueChange = onSeekFractionChange,
+                onValueChangeFinished = onSeekFinished,
+                colors = playerSliderColors(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(elapsed, color = AniColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(12.dp))
+                Box {
+                    PlayerPill(
+                        text = if (qualities.size > 1) "$quality  ⌄" else quality,
+                        onClick = {
+                            if (qualities.size > 1) {
+                                onQualityMenuExpandedChange(!qualityMenuExpanded)
+                            }
+                        },
+                    )
+                    DropdownMenu(
+                        expanded = qualityMenuExpanded,
+                        onDismissRequest = { onQualityMenuExpandedChange(false) },
+                        containerColor = AniColors.SurfaceHigh,
+                    ) {
+                        qualities.forEach { option ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        option,
+                                        color = if (option == quality) {
+                                            AniColors.OrangeBright
+                                        } else {
+                                            AniColors.Text
+                                        },
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                },
+                                enabled = option != quality,
+                                onClick = {
+                                    onQualityMenuExpandedChange(false)
+                                    onQualitySelected(option)
+                                },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                previousEpisode?.let { episode ->
+                    PlayerPill("‹ Предыдущая", { onPlayEpisode(episode) })
+                    Spacer(Modifier.width(8.dp))
+                }
+                nextEpisode?.let { episode ->
+                    PlayerPill("Следующая ›", { onPlayEpisode(episode) }, accent = true)
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerPill(
+    text: String,
+    onClick: () -> Unit,
+    accent: Boolean = false,
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(50),
+        color = if (accent) AniColors.Orange else AniColors.SurfaceHigh.copy(alpha = 0.92f),
+    ) {
+        Text(
+            text,
+            color = AniColors.Text,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            maxLines = 1,
         )
     }
 }
 
-private class AndroidPlayerBridge(
-    context: Context,
-    private val onPlayback: (Double, Double, Float, String?) -> Unit,
-    private val onEnded: () -> Unit,
-    private val onDebug: (String) -> Unit,
-    private val onPlayerDetected: (String) -> Unit,
-    private val onHostAction: (String, String) -> Unit,
+@Composable
+private fun PlayerRoundButton(
+    text: String,
+    onClick: () -> Unit,
+    large: Boolean = false,
+    accent: Boolean = false,
 ) {
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val audioManager =
-        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
-    @JavascriptInterface
-    fun systemVolume(): Double {
-        val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val minimum = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC)
-        } else {
-            0
-        }
-        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val range = (maximum - minimum).coerceAtLeast(1)
-        return ((current - minimum).toDouble() / range).coerceIn(0.0, 1.0)
-    }
-
-    @JavascriptInterface
-    fun setSystemVolume(value: Double) {
-        val normalized = value.coerceIn(0.0, 1.0)
-        val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val minimum = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC)
-        } else {
-            0
-        }
-        val target = minimum + (normalized * (maximum - minimum)).roundToInt()
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
-    }
-
-    @JavascriptInterface
-    fun playback(
-        positionSeconds: Double,
-        durationSeconds: Double,
-        volume: Double,
-        quality: String?,
+    val diameter = if (large) 62.dp else 46.dp
+    Surface(
+        modifier = Modifier
+            .size(diameter)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = if (accent) AniColors.Orange else AniColors.SurfaceHigh.copy(alpha = 0.9f),
     ) {
-        mainHandler.post {
-            onPlayback(
-                positionSeconds.coerceAtLeast(0.0),
-                durationSeconds.coerceAtLeast(0.0),
-                volume.coerceIn(0.0, 1.0).toFloat(),
-                quality?.takeIf(String::isNotBlank),
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text,
+                color = AniColors.Text,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = if (large) 17.sp else 18.sp,
             )
         }
     }
-
-    @JavascriptInterface
-    fun ended() {
-        mainHandler.post(onEnded)
-    }
-
-    @JavascriptInterface
-    fun diagnostic(message: String) {
-        mainHandler.post {
-            onDebug("js: ${message.take(DEBUG_EVENT_MAX_LENGTH - 4)}")
-        }
-    }
-
-    @JavascriptInterface
-    fun playerDetected(width: Int, height: Int, iframeCount: Int) {
-        mainHandler.post {
-            onPlayerDetected("video=${width}x$height; iframes=$iframeCount")
-        }
-    }
-
-    @JavascriptInterface
-    fun hostAction(action: String, value: String) {
-        mainHandler.post {
-            onDebug("host-action=${action.take(40)}")
-            onHostAction(action.take(40), value.take(200))
-        }
-    }
 }
 
-private class AndroidPlayerChromeClient(
-    private val onFullscreenChange: (Boolean) -> Unit,
-    private val onDebug: (String) -> Unit,
-    private val onProgress: (Int) -> Unit,
-) : WebChromeClient() {
-    override fun onShowCustomView(view: View, callback: CustomViewCallback) {
-        onDebug(
-            "provider custom-fullscreen requested (${view.javaClass.simpleName}); " +
-                "kept inline to preserve app overlay",
-        )
-        onFullscreenChange(true)
-        callback.onCustomViewHidden()
-    }
-
-    override fun onHideCustomView() {
-        onDebug("provider custom-fullscreen hidden")
-    }
-
-    override fun onProgressChanged(view: WebView, newProgress: Int) {
-        super.onProgressChanged(view, newProgress)
-        onProgress(newProgress)
-        if (newProgress == 100 || newProgress % 25 == 0) {
-            onDebug("web-progress=$newProgress")
-        }
-    }
-
-    override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
-        onDebug(
-            "console ${consoleMessage.messageLevel()} line=${consoleMessage.lineNumber()}: " +
-                consoleMessage.message().take(180),
-        )
-        return true
-    }
-
-    fun closeCustomView() = Unit
-}
-
-private data class PlayerWebViewState(
-    val url: String,
+@Composable
+private fun playerSliderColors() = SliderDefaults.colors(
+    thumbColor = AniColors.OrangeBright,
+    activeTrackColor = AniColors.OrangeBright,
+    inactiveTrackColor = Color.White.copy(alpha = 0.26f),
 )
 
-private fun loadPlayerHost(
-    webView: WebView,
-    hostConfig: AndroidPlayerHostConfig,
-    onDebug: (String) -> Unit,
-): Unit {
-    val document = androidPlayerHostDocument(hostConfig)
-    val useAllohaCompatibilityMode = isAllohaProviderUrl(hostConfig.playerUrl)
-    webView.settings.userAgentString = if (useAllohaCompatibilityMode) {
-        ALLOHA_DESKTOP_USER_AGENT
+private fun ExoPlayer.safeDuration(): Long =
+    duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+
+private fun Long.clockText(): String {
+    val totalSeconds = (this / 1_000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
     } else {
-        WebSettings.getDefaultUserAgent(webView.context)
+        "%d:%02d".format(minutes, seconds)
     }
-    webView.tag = PlayerWebViewState(hostConfig.playerUrl)
-    onDebug(
-        if (useAllohaCompatibilityMode) {
-            "user-agent=desktop Chromium compatibility mode for Alloha"
-        } else {
-            "user-agent=default Android WebView"
-        },
-    )
-    onDebug(
-        "host loadDataWithBaseURL; base=${sanitizeUrl(hostConfig.playerUrl)}; " +
-            "documentLength=${document.length}",
-    )
-    webView.loadDataWithBaseURL(
-        hostConfig.playerUrl,
-        document,
-        "text/html",
-        "utf-8",
-        hostConfig.playerUrl,
-    )
 }
 
-private fun isAllowedPlayerNavigation(uri: Uri): Boolean {
-    return uri.toString() == "about:blank" || uri.scheme.equals("https", ignoreCase = true)
-}
+private fun EpisodeDto.isDeferredAlloha(): Boolean =
+    displayPlayerName.contains("Alloha", ignoreCase = true)
 
-private fun isKodikProviderUrl(url: String): Boolean {
-    val host = Uri.parse(url).host.orEmpty()
-    return host == "kodikplayer.com" || host.endsWith(".kodikplayer.com")
-}
-
-private fun isAllohaProviderUrl(url: String): Boolean {
-    val host = Uri.parse(url).host.orEmpty()
-    return host == "alloha.yani.tv" || host.endsWith(".alloha.yani.tv")
-}
-
-private fun sanitizeUrl(url: String): String {
-    if (url == "about:blank") return url
-    return runCatching {
-        val uri = Uri.parse(url)
-        buildString {
-            uri.scheme?.let {
-                append(it)
-                append("://")
-            }
-            append(uri.host ?: "<no-host>")
-            append(uri.path.orEmpty())
-        }
-    }.getOrElse { "<invalid-url>" }
-}
-
-private fun collectWebViewMetrics(webView: WebView): String {
-    return "view=${webView.width}x${webView.height}px; " +
-        "contentHeight=${webView.contentHeight}px; " +
-        "progress=${webView.progress}; " +
-        "shown=${webView.isShown}; " +
-        "url=${sanitizeUrl(webView.url.orEmpty())}"
-}
-
-private val PLAYER_DIAGNOSTIC_SCRIPT = """
-    (() => {
-      try {
-        const summary =
-          'snapshot; ready=' + document.readyState +
-          '; title=' + String(document.title || '').slice(0, 80) +
-          '; body=' + (document.body ? document.body.childElementCount : -1) +
-          '; html=' + (document.documentElement ? document.documentElement.scrollWidth + 'x' + document.documentElement.scrollHeight : 'none') +
-          '; viewport=' + window.innerWidth + 'x' + window.innerHeight +
-          '; iframes=' + document.querySelectorAll('iframe').length +
-          '; videos=' + document.querySelectorAll('video').length +
-          '; uaPlatform=' + String(navigator.userAgentData?.platform || navigator.platform || '').slice(0, 40) +
-          '; uaMobile=' + String(navigator.userAgentData?.mobile ?? 'unknown');
-        HoshiraAndroid.diagnostic(summary);
-        return summary;
-      } catch (error) {
-        try { HoshiraAndroid.diagnostic('snapshot failed: ' + String(error)); } catch (_) {}
-        return 'snapshot-failed';
-      }
-    })();
-""".trimIndent()
-
-private const val JS_BRIDGE_NAME = "HoshiraAndroid"
-private const val PLAYER_DIAGNOSTIC_TIMEOUT_MS = 10_000L
 private const val PLAYER_DEBUG_TAG = "HoshiraPlayer"
-private const val PLAYER_HOST_VERSION = "mobile-touch-system-audio-v4"
-private const val ALLOHA_DESKTOP_USER_AGENT =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-private val ANDROID_BUILD_LABEL =
-    "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-private const val DEBUG_EVENT_MAX_LENGTH = 320
+private const val ANDROID_HLS_USER_AGENT = "Hoshira Android HLS/0.4.0"

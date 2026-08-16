@@ -59,6 +59,7 @@ internal class HlsStreamResolver(
         url: String,
         preferredVoice: String? = null,
         preferredQuality: String? = null,
+        preferHls: Boolean = false,
     ): PlaybackSource.DirectMedia {
         debug("resolver input ${url.hlsDebugUrl()}")
         val uri = url.toHttpUri()
@@ -128,7 +129,7 @@ internal class HlsStreamResolver(
             "$VIDEO_HUB_API/player/sv/video/${videoId.urlEncode()}",
         )
         val source = video.sources
-            ?.toDirectMedia(preferredQuality)
+            ?.toDirectMedia(preferredQuality, preferHls)
             ?: throw HlsResolutionException("VideoHub не вернул доступный медиапоток.")
         debug(
             "CVH media resolved quality=${source.quality ?: "adaptive"} " +
@@ -354,7 +355,7 @@ internal class HlsStreamResolver(
                 "Accept" to "application/json",
                 "Origin" to YUMMY_ANIME_ORIGIN,
                 "Referer" to "$YUMMY_ANIME_ORIGIN/",
-                "User-Agent" to "Hoshira/0.4",
+                "User-Agent" to VIDEO_HUB_USER_AGENT,
             ),
         )
     }
@@ -600,7 +601,20 @@ private data class VideoHubSources(
 
 private fun VideoHubSources.toDirectMedia(
     preferredQuality: String?,
+    preferHls: Boolean = false,
 ): PlaybackSource.DirectMedia? {
+    // VideoHub signs media URLs for the same user agent that requested the API.
+    // Sending Media3's own user agent makes the CDN reject an otherwise valid URL with HTTP 400.
+    val playbackHeaders = mapOf(
+        "User-Agent" to VIDEO_HUB_USER_AGENT,
+    )
+    val hls = hlsUrl?.toHttpUri()?.toASCIIString()
+    if (preferHls && hls != null) {
+        return PlaybackSource.DirectMedia(
+            url = hls,
+            headers = playbackHeaders,
+        )
+    }
     val mp4ByQuality = linkedMapOf(
         "2160" to mpeg4kUrl,
         "1440" to mpegQhdUrl,
@@ -621,12 +635,17 @@ private fun VideoHubSources.toDirectMedia(
             ?: mp4ByQuality.keys.first()
         return PlaybackSource.DirectMedia(
             url = requireNotNull(mp4ByQuality[selectedQuality]),
+            headers = playbackHeaders,
             quality = selectedQuality.qualityLabel(),
             availableQualities = mp4ByQuality.keys.map(String::qualityLabel),
         )
     }
-    val hls = hlsUrl?.toHttpUri()?.toASCIIString() ?: return null
-    return PlaybackSource.DirectMedia(hls)
+    return hls?.let {
+        PlaybackSource.DirectMedia(
+            url = it,
+            headers = playbackHeaders,
+        )
+    }
 }
 
 @Serializable
@@ -905,6 +924,7 @@ private fun String.decodeJavaScriptString(): String {
 private const val VIDEO_HUB_API = "https://plapi.cdnvideohub.com/api/v1"
 private const val VIDEO_HUB_PUBLISHER = 745
 private const val VIDEO_HUB_AGGREGATOR = "mali"
+private const val VIDEO_HUB_USER_AGENT = "Hoshira/0.4"
 private const val YUMMY_ANIME_ORIGIN = "https://ru.yummyani.me"
 private const val ALLOHA_HOST = "alloha.yani.tv"
 private val KODIK_HOSTS = setOf("kodikplayer.com", "kodik.info", "aniqit.com")
@@ -919,11 +939,11 @@ private val KODIK_INLINE_SCRIPT_REGEX = Regex(
     RegexOption.IGNORE_CASE,
 )
 private val KODIK_SECURE_JSON_REGEX = Regex(
-    """'\s*(\{[^']+})\s*'""",
+    """'\s*(\{[^']+\})\s*'""",
     setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
 )
 private val KODIK_VINFO_OBJECT_REGEX = Regex(
-    """\bvInfo\s*=\s*\{([\s\S]*?)}\s*;""",
+    """\bvInfo\s*=\s*\{([\s\S]*?)\}\s*;""",
 )
 private const val KODIK_JS_VALUE_PATTERN =
     """(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|Number\(\s*(\d+)\s*\)|(\d+))"""

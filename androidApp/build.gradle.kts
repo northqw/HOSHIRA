@@ -27,8 +27,8 @@ android {
         applicationId = "dev.aniliberty.hoshira"
         minSdk = 26
         targetSdk = 36
-        versionCode = 303
-        versionName = "0.3.3"
+        versionCode = 400
+        versionName = "0.4.0"
     }
 
     buildFeatures {
@@ -70,6 +70,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.webkit:webkit:1.16.0")
+
+    val media3Version = "1.10.1"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
 
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")

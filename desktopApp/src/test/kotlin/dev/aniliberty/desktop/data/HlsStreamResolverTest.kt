@@ -108,6 +108,36 @@ class HlsStreamResolverTest {
     }
 
     @Test
+    fun `VideoHub can prefer HLS for Android playback`() {
+        val client = RecordingHlsClient(
+            mapOf(
+                "/player/sv/playlist" to
+                    """{"items":[{"vkId":"video-1","voiceStudio":"Voice","episode":1}]}""",
+                "/player/sv/video/video-1" to
+                    """
+                    {
+                      "sources": {
+                        "hlsUrl": "https://cdn.example/master.m3u8",
+                        "mpegHighUrl": "https://cdn.example/720.mp4"
+                      }
+                    }
+                    """.trimIndent(),
+            ),
+        )
+
+        val source = HlsStreamResolver(client).resolve(
+            url = "https://ru.yummyani.me/iframeCVH.html?anime_id=1&episode=1",
+            preferredVoice = "Voice",
+            preferredQuality = "720p",
+            preferHls = true,
+        )
+
+        assertEquals("https://cdn.example/master.m3u8", source.url)
+        assertEquals(null, source.quality)
+        assertTrue(source.availableQualities.isEmpty())
+    }
+
+    @Test
     fun `unsupported iframe is rejected before a network request`() {
         val client = RecordingHlsClient(emptyMap())
         val resolver = HlsStreamResolver(client)

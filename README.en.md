@@ -11,7 +11,7 @@
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.3.0-ff4e00?style=flat-square" alt="Version 0.3.0">
+    <img src="https://img.shields.io/badge/version-0.4.0-ff4e00?style=flat-square" alt="Version 0.4.0">
     <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-111318?style=flat-square&logo=windows" alt="Windows 10/11">
     <img src="https://img.shields.io/badge/Linux-experimental-111318?style=flat-square&logo=linux" alt="Linux experimental">
     <img src="https://img.shields.io/badge/Android%20beta-in%20development-3ddc84?style=flat-square&logo=android&logoColor=white" alt="Android beta in development">
@@ -48,7 +48,7 @@ window, session storage, and embedded browser have platform implementations.
 | Catalog | Infinite loading, filters, and sorting |
 | Search | Debounced catalog search with clear loading and error states |
 | Anime details | Artwork, metadata, genres, dubbing studio selector, and episodes |
-| Player | WebView2 on Windows, WebKitGTK on Linux, source and quality selection, custom playback controls |
+| Player | Native HLS on Windows and Android (Media3), WebKitGTK on Linux, source and quality selection, custom controls |
 | Account | YummyAnime sign-in, favorites, and personal lists |
 | Desktop UX | Image cache, dark window chrome, loading states, and a branded installer |
 
@@ -57,8 +57,6 @@ window, session storage, and embedded browser have platform implementations.
 ### Installed application
 
 - Windows 10 or Windows 11, x64;
-- Microsoft Edge WebView2 Runtime; when missing, the installer adds the
-  official Microsoft Evergreen Runtime;
 - an internet connection.
 
 The JVM is bundled with the desktop distribution.
@@ -110,7 +108,8 @@ details.
 - Compose Multiplatform Desktop;
 - Kotlin Coroutines and Serialization;
 - Coil 3 with disk-backed image caching;
-- JNA and Microsoft WebView2 for native Windows integration;
+- JNA for native Windows integration and JavaFX Media for HLS playback;
+- AndroidX Media3/ExoPlayer for native HLS playback on Android;
 - Eclipse SWT, WebKitGTK, and GStreamer for the experimental Linux player;
 - Gradle Wrapper;
 - WiX/jpackage with a custom C# installer shell.

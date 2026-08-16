@@ -82,7 +82,7 @@ compose.desktop {
                 "linux" -> targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
             }
             packageName = "Hoshira"
-            packageVersion = "0.3.0"
+            packageVersion = "0.4.0"
             description = "Hoshira — неофициальный desktop-клиент для просмотра аниме"
             vendor = "Hoshira Community"
             modules(
@@ -144,7 +144,7 @@ val createPortableDistributable by tasks.registering(Sync::class) {
             .asFile
         appRoot.mkdirs()
         appRoot.resolve("portable.flag").writeText(
-            "Hoshira portable mode 0.3.0\n",
+            "Hoshira portable mode 0.4.0\n",
         )
     }
 }

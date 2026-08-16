@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.0"
+    [string]$Version = "0.4.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +19,7 @@ $installerSource = Join-Path $desktopApp "installer\HoshiraInstaller.cs"
 $csharpCompiler = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $jpackage = Join-Path $env:JAVA_HOME "bin\jpackage.exe"
 
-if ($Version -ne "0.3.0") {
+if ($Version -ne "0.4.0") {
     throw "Update InstallerVersion and assembly version in HoshiraInstaller.cs before building $Version."
 }
 if (-not (Test-Path -LiteralPath $csharpCompiler)) {

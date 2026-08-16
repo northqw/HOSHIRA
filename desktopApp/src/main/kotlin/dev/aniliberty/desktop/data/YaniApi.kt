@@ -209,7 +209,7 @@ class YaniApi(
             setRequestProperty("Accept", "application/json,image/avif,image/webp")
             setRequestProperty("Lang", "ru")
             setRequestProperty("X-Application", applicationToken)
-            setRequestProperty("User-Agent", "Hoshira/0.3")
+            setRequestProperty("User-Agent", "Hoshira/0.4")
             bearerToken
                 ?.takeIf(String::isNotBlank)
                 ?.let { setRequestProperty("Authorization", "Bearer $it") }

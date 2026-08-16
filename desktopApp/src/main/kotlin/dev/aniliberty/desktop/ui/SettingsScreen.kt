@@ -54,7 +54,7 @@ fun SettingsScreen(
                 if (portableMode) {
                     "Portable-режим · данные хранятся рядом с приложением"
                 } else {
-                    "Настройки Hoshira 0.3.0"
+                    "Настройки Hoshira 0.4.0"
                 },
                 color = AniColors.TextMuted,
             )
@@ -126,7 +126,7 @@ fun SettingsScreen(
         }
         item {
             Text(
-                "Hoshira Desktop 0.3.0",
+                "Hoshira Desktop 0.4.0",
                 color = AniColors.TextMuted.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.labelLarge,
             )
