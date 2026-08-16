@@ -8,17 +8,17 @@ plugins {
     id("org.jetbrains.compose")
 }
 
-group = "dev.aniliberty.android"
+group = "app.hoshira.android"
 
 val sharedDesktopSourceRoot =
     project.file("../desktopApp/src/main/kotlin").absoluteFile.normalize()
 val desktopOnlySources = listOf(
-    "dev/aniliberty/desktop/Main.kt",
-    "dev/aniliberty/desktop/PortableMode.kt",
-    "dev/aniliberty/desktop/WindowsWindowStyle.kt",
-    "dev/aniliberty/desktop/ui/Theme.kt",
-    "dev/aniliberty/desktop/ui/PlayerScreen.kt",
-    "dev/aniliberty/desktop/ui/EmbeddedPlayerHost.kt",
+    "app/hoshira/desktop/Main.kt",
+    "app/hoshira/desktop/PortableMode.kt",
+    "app/hoshira/desktop/WindowsWindowStyle.kt",
+    "app/hoshira/desktop/ui/Theme.kt",
+    "app/hoshira/desktop/ui/PlayerScreen.kt",
+    "app/hoshira/desktop/ui/EmbeddedPlayerHost.kt",
 ).map { sharedDesktopSourceRoot.resolve(it).normalize() }.toSet()
 
 val releaseSigningProperties = Properties().apply {
@@ -44,11 +44,11 @@ val hasReleaseSigning = listOf(
 ).all { it != null }
 
 android {
-    namespace = "dev.aniliberty.android"
+    namespace = "app.hoshira.android"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.aniliberty.hoshira"
+        applicationId = "app.hoshira"
         minSdk = 26
         targetSdk = 36
         versionCode = 400

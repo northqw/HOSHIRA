@@ -1,0 +1,2444 @@
+package app.hoshira.desktop.ui
+
+import app.hoshira.desktop.data.HlsStreamResolver
+import app.hoshira.desktop.data.hlsDebugUrl
+import java.awt.BorderLayout
+import java.awt.Color as AwtColor
+import java.awt.Dimension
+import java.awt.EventQueue
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.GraphicsEnvironment
+import java.awt.GridBagLayout
+import java.awt.LinearGradientPaint
+import java.awt.RenderingHints
+import java.awt.BasicStroke
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
+import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseMotionAdapter
+import java.awt.geom.RoundRectangle2D
+import java.awt.geom.Arc2D
+import java.awt.geom.Ellipse2D
+import java.awt.geom.Path2D
+import java.awt.geom.Point2D
+import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import javafx.animation.KeyFrame
+import javafx.animation.PauseTransition
+import javafx.animation.Timeline
+import javafx.application.Platform
+import javafx.embed.swing.JFXPanel
+import javafx.event.EventHandler
+import javafx.geometry.Insets
+import javafx.geometry.Pos
+import javafx.scene.Cursor
+import javafx.scene.Scene
+import javafx.scene.SnapshotParameters
+import javafx.scene.control.Button
+import javafx.scene.control.Label
+import javafx.scene.control.MenuButton
+import javafx.scene.control.MenuItem
+import javafx.scene.control.ProgressIndicator
+import javafx.scene.control.Slider
+import javafx.scene.input.KeyCode
+import javafx.scene.input.MouseEvent
+import javafx.scene.image.PixelFormat
+import javafx.scene.image.WritableImage
+import javafx.scene.layout.BorderPane
+import javafx.scene.layout.HBox
+import javafx.scene.layout.Priority
+import javafx.scene.layout.StackPane
+import javafx.scene.layout.VBox
+import javafx.scene.media.Media
+import javafx.scene.media.MediaPlayer
+import javafx.scene.media.MediaView
+import javafx.scene.paint.Color
+import javafx.scene.transform.Transform
+import javafx.util.Duration
+import javax.swing.BorderFactory
+import javax.swing.AbstractAction
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.DefaultListCellRenderer
+import javax.swing.JButton
+import javax.swing.JComboBox
+import javax.swing.JComponent
+import javax.swing.JLabel
+import javax.swing.JList
+import javax.swing.JPanel
+import javax.swing.JSlider
+import javax.swing.JWindow
+import javax.swing.KeyStroke
+import javax.swing.SwingConstants
+import javax.swing.SwingUtilities
+import javax.swing.event.PopupMenuEvent
+import javax.swing.event.PopupMenuListener
+import javax.swing.plaf.basic.BasicComboBoxUI
+import javax.swing.plaf.basic.BasicComboPopup
+import javax.swing.plaf.basic.BasicSliderUI
+import javax.swing.plaf.basic.ComboPopup
+import kotlin.concurrent.thread
+import kotlin.math.roundToLong
+import kotlin.math.roundToInt
+
+/**
+ * Windows HLS player. JavaFX Media decodes the adaptive stream directly; no
+ * browser engine, provider page or DOM interception is involved.
+ */
+internal class NativeDesktopPlayerPanel(
+    initialUrl: String,
+    initialChrome: EmbeddedPlayerChrome,
+    onStateChange: (EmbeddedPlayerState) -> Unit,
+    onAction: (EmbeddedPlayerAction) -> Unit,
+) : JPanel(BorderLayout()) {
+    private val videoSurface = AwtVideoSurface()
+    private val fxPanel = JFXPanel().apply {
+        background = AwtColor.BLACK
+    }
+    private val debugSession = HlsDebugSession()
+    private val resolver = HlsStreamResolver(debug = debugSession::record)
+    private val started = AtomicBoolean(false)
+    private val sceneInstallScheduled = AtomicBoolean(false)
+    private val sceneInstalled = AtomicBoolean(false)
+    private val disposed = AtomicBoolean(false)
+    private val generation = AtomicLong()
+
+    @Volatile
+    private var requestedUrl = initialUrl
+
+    @Volatile
+    private var requestedChrome = initialChrome
+
+    @Volatile
+    private var stateCallback = onStateChange
+
+    @Volatile
+    private var actionCallback = onAction
+
+    @Volatile
+    private var fullscreen = false
+
+    private var fullscreenWindow: JWindow? = null
+
+    private var activeRequestUrl: String? = null
+    private var activeQuality: String? = null
+    private var availableQualities: List<String> = emptyList()
+    private var selectedQualityOverride: String? = initialChrome.preferredQuality
+    private var mediaPlayer: MediaPlayer? = null
+    private var root: StackPane? = null
+    private var mediaView: MediaView? = null
+    private var topBar: HBox? = null
+    private var bottomBar: VBox? = null
+    private var titleLabel: Label? = null
+    private var subtitleLabel: Label? = null
+    private var sourceMenu: MenuButton? = null
+    private var fullscreenButton: Button? = null
+    private var playButton: Button? = null
+    private var previousButton: Button? = null
+    private var nextButton: Button? = null
+    private var seekSlider: Slider? = null
+    private var volumeSlider: Slider? = null
+    private var elapsedLabel: Label? = null
+    private var statusLabel: Label? = null
+    private var statusSpinner: ProgressIndicator? = null
+    private var qualityLabel: Label? = null
+    private var controlsTimer: PauseTransition? = null
+    private var frameCaptureTimer: Timeline? = null
+    private var snapshotImage: WritableImage? = null
+    private var snapshotBuffers: Array<BufferedImage>? = null
+    private var snapshotWidth = CAPTURE_WIDTH
+    private var snapshotHeight = CAPTURE_HEIGHT
+    private var snapshotWriteIndex = 0
+    private var firstFrameLogged = false
+    private var seeking = false
+    private var lastPlaybackNotificationNanos = 0L
+    private var lastPlaybackUiUpdateNanos = 0L
+
+    private val awtTitleLabel = EllipsizedLabel(MAX_TITLE_CHARACTERS)
+    private val awtSubtitleLabel = JLabel()
+    private val awtSourceSelector = JComboBox<String>()
+    private val awtQualitySelector = JComboBox<String>()
+    private val awtBackButton = HoshiraPlayerButton("←   Назад", pill = true)
+    private val awtFullscreenButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.Fullscreen,
+    )
+    private val awtRewindButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.RewindTen,
+    )
+    private val awtPlayButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.Play,
+    )
+    private val awtCenterPlayButton = HoshiraPlayerButton(
+        accent = true,
+        circular = true,
+        glyph = PlayerGlyph.Play,
+    )
+    private val awtForwardButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.ForwardTen,
+    )
+    private val awtNextButton = HoshiraPlayerButton(
+        accent = true,
+        circular = true,
+        glyph = PlayerGlyph.Next,
+    )
+    private val awtVolumeButton = HoshiraPlayerButton(
+        circular = true,
+        glyph = PlayerGlyph.Volume,
+    )
+    private val awtElapsedLabel = JLabel("00:00 / 00:00")
+    private val awtEpisodeLabel = JLabel()
+    private val awtSeekSlider = JSlider(0, SEEK_RANGE.toInt(), 0)
+    private val awtVolumeSlider = JSlider(0, 100, (initialChrome.startupVolume * 100).toInt())
+    private var awtSourceIds = emptyList<String>()
+    private var awtSourceEnabled = emptyList<Boolean>()
+    private var awtSelectedSourceIndex = -1
+    private var awtSourceUpdate = false
+    private var awtQualityUpdate = false
+    private var awtSeeking = false
+
+    init {
+        background = AwtColor.BLACK
+        add(createAwtPlayerHost(), BorderLayout.CENTER)
+        installAwtKeyboardActions()
+        debugSession.record(
+            "JavaFX decoder created prism=${System.getProperty("prism.order", "default")}",
+        )
+        addComponentListener(
+            object : ComponentAdapter() {
+                override fun componentShown(event: ComponentEvent?) {
+                    scheduleSceneInstall("shown")
+                }
+
+                override fun componentResized(event: ComponentEvent?) {
+                    scheduleSceneInstall("resized")
+                    requestSurfaceRepaint()
+                }
+            },
+        )
+        videoSurface.addMouseMotionListener(
+            object : MouseMotionAdapter() {
+                override fun mouseMoved(event: java.awt.event.MouseEvent?) {
+                    Platform.runLater { showControls() }
+                }
+
+                override fun mouseDragged(event: java.awt.event.MouseEvent?) {
+                    Platform.runLater { showControls(permanent = true) }
+                }
+            },
+        )
+    }
+
+    override fun addNotify() {
+        super.addNotify()
+        scheduleSceneInstall("addNotify")
+        requestSurfaceRepaint()
+        if (started.compareAndSet(false, true)) {
+            startResolution()
+        }
+    }
+
+    override fun removeNotify() {
+        // Compose temporarily detaches SwingPanel while moving the window in and
+        // out of fullscreen. The player belongs to PlayerScreen's lifecycle, so
+        // detaching the peer must not destroy the decoder or the current frame.
+        debugSession.record("Swing surface detached; preserving player for reattach")
+        super.removeNotify()
+    }
+
+    fun update(
+        url: String,
+        chrome: EmbeddedPlayerChrome,
+        onStateChange: (EmbeddedPlayerState) -> Unit,
+        onAction: (EmbeddedPlayerAction) -> Unit,
+    ) {
+        stateCallback = onStateChange
+        actionCallback = onAction
+        val urlChanged = requestedUrl != url
+        requestedUrl = url
+        requestedChrome = chrome
+        if (urlChanged) {
+            selectedQualityOverride = chrome.preferredQuality
+            activeQuality = null
+            availableQualities = emptyList()
+        }
+        Platform.runLater {
+            updateChrome(chrome)
+        }
+        if (urlChanged && started.get() && !disposed.get()) {
+            startResolution()
+        }
+    }
+
+    fun setFullscreenState(fullscreen: Boolean) {
+        this.fullscreen = fullscreen
+        EventQueue.invokeLater {
+            if (fullscreen) {
+                enterNativeFullscreen()
+            } else {
+                exitNativeFullscreen()
+            }
+            awtFullscreenButton.glyph =
+                if (fullscreen) PlayerGlyph.ExitFullscreen else PlayerGlyph.Fullscreen
+        }
+        Platform.runLater {
+            fullscreenButton?.text = if (fullscreen) "🗗" else "⛶"
+        }
+    }
+
+    fun disposePlayer() {
+        if (!disposed.compareAndSet(false, true)) return
+        generation.incrementAndGet()
+        val oldActionCallback = actionCallback
+        actionCallback = {}
+        stateCallback = {}
+        EventQueue.invokeLater {
+            videoSurface.disposeSurface()
+            exitNativeFullscreen()
+        }
+        Platform.runLater {
+            emitPlayback(oldActionCallback)
+            controlsTimer?.stop()
+            controlsTimer = null
+            frameCaptureTimer?.stop()
+            frameCaptureTimer = null
+            mediaPlayer?.stop()
+            mediaPlayer?.dispose()
+            mediaPlayer = null
+            mediaView?.mediaPlayer = null
+            fxPanel.scene = null
+        }
+    }
+
+    private fun enterNativeFullscreen() {
+        if (disposed.get() || fullscreenWindow != null) return
+        val owner = SwingUtilities.getWindowAncestor(this)
+        val screenBounds = owner?.graphicsConfiguration?.bounds
+            ?: GraphicsEnvironment
+                .getLocalGraphicsEnvironment()
+                .defaultScreenDevice
+                .defaultConfiguration
+                .bounds
+        remove(videoSurface)
+        revalidate()
+        repaint()
+        val host = JWindow(owner).apply {
+            background = AwtColor.BLACK
+            contentPane.background = AwtColor.BLACK
+            contentPane.layout = BorderLayout()
+            contentPane.add(videoSurface, BorderLayout.CENTER)
+            bounds = screenBounds
+            focusableWindowState = true
+        }
+        fullscreenWindow = host
+        host.validate()
+        host.isVisible = true
+        host.toFront()
+        host.requestFocus()
+        videoSurface.requestFocusInWindow()
+        debugSession.record(
+            "native fullscreen entered bounds=${screenBounds.width}x${screenBounds.height}",
+        )
+        requestSurfaceRepaint()
+    }
+
+    private fun exitNativeFullscreen() {
+        val host = fullscreenWindow ?: return
+        fullscreenWindow = null
+        host.contentPane.remove(videoSurface)
+        host.isVisible = false
+        host.dispose()
+        if (videoSurface.parent !== this) {
+            add(videoSurface, BorderLayout.CENTER)
+        }
+        revalidate()
+        repaint()
+        SwingUtilities.getWindowAncestor(this)?.apply {
+            toFront()
+            requestFocus()
+        }
+        debugSession.record("native fullscreen exited")
+        requestSurfaceRepaint()
+    }
+
+    private fun createAwtPlayerHost(): JComponent {
+        val heading = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(awtTitleLabel)
+            add(awtSubtitleLabel)
+        }
+        awtTitleLabel.apply {
+            foreground = AWT_TEXT
+            font = hoshiraFont(Font.BOLD, 21f)
+            maximumSize = Dimension(720, 29)
+        }
+        awtSubtitleLabel.apply {
+            foreground = AWT_MUTED
+            font = hoshiraFont(Font.PLAIN, 14f)
+        }
+        awtSourceSelector.apply {
+            preferredSize = Dimension(244, 46)
+            maximumSize = Dimension(300, 46)
+            isOpaque = false
+            foreground = AWT_TEXT
+            isFocusable = false
+            font = hoshiraFont(Font.BOLD, 12f)
+            border = BorderFactory.createEmptyBorder(0, 12, 0, 5)
+            isLightWeightPopupEnabled = false
+            ui = HoshiraComboBoxUi()
+            renderer = HoshiraComboRenderer(prefix = "ИСТОЧНИК")
+            addActionListener {
+                if (awtSourceUpdate) return@addActionListener
+                val index = selectedIndex
+                if (index < 0 || awtSourceEnabled.getOrNull(index) != true) {
+                    awtSourceUpdate = true
+                    selectedIndex = awtSelectedSourceIndex
+                    awtSourceUpdate = false
+                    return@addActionListener
+                }
+                awtSourceIds.getOrNull(index)?.let { episodeId ->
+                    emitAction(EmbeddedPlayerAction.SelectSource(episodeId))
+                }
+            }
+        }
+        styleAwtButton(awtBackButton) {
+            emitAction(EmbeddedPlayerAction.Back)
+        }
+        awtBackButton.apply {
+            preferredSize = Dimension(114, 48)
+            maximumSize = Dimension(124, 48)
+            font = hoshiraFont(Font.BOLD, 13f)
+            toolTipText = "Назад"
+        }
+        styleAwtButton(awtFullscreenButton) {
+            emitAction(EmbeddedPlayerAction.SetFullscreen(!fullscreen))
+        }
+        awtFullscreenButton.apply {
+            preferredSize = Dimension(46, 46)
+            maximumSize = Dimension(46, 46)
+            toolTipText = "Полный экран (F)"
+        }
+        val sourcePill = PillControlPanel().apply {
+            preferredSize = Dimension(248, 48)
+            maximumSize = Dimension(304, 48)
+            add(awtSourceSelector, BorderLayout.CENTER)
+        }
+        val upper = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(20, 32, 8, 32)
+            add(awtBackButton)
+            add(Box.createHorizontalStrut(24))
+            add(heading)
+            add(Box.createHorizontalGlue())
+            add(sourcePill)
+        }
+
+        styleAwtButton(awtRewindButton) {
+            Platform.runLater { seekBy(-10.0) }
+        }
+        awtRewindButton.toolTipText = "Назад на 10 секунд"
+        styleAwtButton(awtPlayButton) {
+            Platform.runLater { togglePlayback() }
+        }
+        awtPlayButton.apply {
+            preferredSize = Dimension(46, 46)
+            maximumSize = Dimension(46, 46)
+            toolTipText = "Пауза / продолжить (Пробел)"
+        }
+        styleAwtButton(awtCenterPlayButton) {
+            Platform.runLater { togglePlayback() }
+        }
+        awtCenterPlayButton.apply {
+            preferredSize = Dimension(74, 74)
+            minimumSize = Dimension(74, 74)
+            maximumSize = Dimension(74, 74)
+            isVisible = false
+            toolTipText = "Продолжить воспроизведение"
+        }
+        styleAwtButton(awtForwardButton) {
+            Platform.runLater { seekBy(10.0) }
+        }
+        awtForwardButton.toolTipText = "Вперёд на 10 секунд"
+        styleAwtButton(awtNextButton) {
+            emitAction(EmbeddedPlayerAction.Next)
+        }
+        awtNextButton.apply {
+            preferredSize = Dimension(46, 46)
+            maximumSize = Dimension(46, 46)
+            font = hoshiraFont(Font.BOLD, 22f)
+            toolTipText = "Следующая серия"
+        }
+        styleAwtButton(awtVolumeButton) {
+            val muted = awtVolumeSlider.value > 0
+            awtVolumeSlider.value = if (muted) 0 else 100
+            awtVolumeButton.glyph = if (muted) PlayerGlyph.Muted else PlayerGlyph.Volume
+        }
+        awtVolumeButton.apply {
+            preferredSize = Dimension(46, 46)
+            maximumSize = Dimension(46, 46)
+            font = Font(Font.SANS_SERIF, Font.PLAIN, 15)
+            toolTipText = "Выключить звук"
+        }
+        awtElapsedLabel.apply {
+            foreground = AWT_TEXT
+            font = hoshiraFont(Font.BOLD, 12f)
+            horizontalAlignment = SwingConstants.LEFT
+            preferredSize = Dimension(126, 40)
+            maximumSize = Dimension(140, 40)
+        }
+        awtEpisodeLabel.apply {
+            foreground = AwtColor(244, 244, 247, 194)
+            font = hoshiraFont(Font.BOLD, 13f)
+            horizontalAlignment = SwingConstants.CENTER
+            border = BorderFactory.createEmptyBorder(0, 14, 0, 14)
+        }
+        awtSeekSlider.apply {
+            isOpaque = false
+            ui = HoshiraSliderUi(this)
+            addChangeListener {
+                if (valueIsAdjusting) {
+                    awtSeeking = true
+                } else if (awtSeeking) {
+                    awtSeeking = false
+                    val value = value
+                    Platform.runLater {
+                        val player = mediaPlayer ?: return@runLater
+                        val duration = player.totalDuration.safeSeconds()
+                        if (duration > 0.0) {
+                            player.seek(
+                                Duration.seconds(duration * value / SEEK_RANGE),
+                            )
+                        }
+                    }
+                }
+            }
+            addMouseListener(
+                object : MouseAdapter() {
+                    override fun mousePressed(event: java.awt.event.MouseEvent) {
+                        if (!SwingUtilities.isLeftMouseButton(event)) return
+                        awtSeeking = true
+                        setSliderValueAtPointer(this@apply, event.x)
+                    }
+
+                    override fun mouseReleased(event: java.awt.event.MouseEvent) {
+                        if (!SwingUtilities.isLeftMouseButton(event)) return
+                        setSliderValueAtPointer(this@apply, event.x)
+                        awtSeeking = false
+                        seekToAwtSliderPosition()
+                    }
+                },
+            )
+        }
+        awtVolumeSlider.apply {
+            isOpaque = false
+            ui = HoshiraSliderUi(this)
+            preferredSize = Dimension(92, 32)
+            maximumSize = Dimension(110, 32)
+            addChangeListener {
+                val volume = value / 100.0
+                Platform.runLater {
+                    mediaPlayer?.volume = volume
+                    if (!valueIsAdjusting) emitPlayback()
+                }
+                awtVolumeButton.glyph =
+                    if (value == 0) PlayerGlyph.Muted else PlayerGlyph.Volume
+            }
+        }
+        awtQualitySelector.apply {
+            preferredSize = Dimension(112, 46)
+            maximumSize = Dimension(132, 46)
+            isOpaque = false
+            foreground = AWT_TEXT
+            isFocusable = false
+            font = hoshiraFont(Font.BOLD, 12f)
+            border = BorderFactory.createEmptyBorder(0, 6, 0, 4)
+            isLightWeightPopupEnabled = false
+            ui = HoshiraComboBoxUi()
+            renderer = HoshiraComboRenderer(centerClosedValue = true)
+            addActionListener {
+                if (awtQualityUpdate) return@addActionListener
+                (selectedItem as? String)?.let(::selectQuality)
+            }
+        }
+        val qualityPill = PillControlPanel().apply {
+            preferredSize = Dimension(116, 48)
+            maximumSize = Dimension(136, 48)
+            add(awtQualitySelector, BorderLayout.CENTER)
+        }
+        val leftControls = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            add(awtPlayButton)
+            add(Box.createHorizontalStrut(8))
+            add(awtRewindButton)
+            add(Box.createHorizontalStrut(8))
+            add(awtForwardButton)
+            add(Box.createHorizontalStrut(14))
+            add(awtElapsedLabel)
+        }
+        val episodePill = PillControlPanel().apply {
+            preferredSize = Dimension(82, 46)
+            maximumSize = Dimension(104, 46)
+            add(awtEpisodeLabel, BorderLayout.CENTER)
+        }
+        val centerControls = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            add(episodePill)
+            add(Box.createHorizontalStrut(10))
+            add(awtNextButton)
+        }
+        val rightControls = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            add(qualityPill)
+            add(Box.createHorizontalStrut(10))
+            add(awtVolumeButton)
+            add(Box.createHorizontalStrut(8))
+            add(awtVolumeSlider)
+            add(Box.createHorizontalStrut(12))
+            add(awtFullscreenButton)
+        }
+        val playbackRow = ThreeZoneControls(leftControls, centerControls, rightControls)
+        val lower = JPanel(BorderLayout(0, 6)).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(0, 32, 20, 32)
+            add(awtSeekSlider, BorderLayout.NORTH)
+            add(playbackRow, BorderLayout.CENTER)
+        }
+        val overlay = ChromeOverlayPanel().apply {
+            layout = BorderLayout()
+            add(upper, BorderLayout.NORTH)
+            add(lower, BorderLayout.SOUTH)
+            addMouseListener(
+                object : MouseAdapter() {
+                    override fun mouseClicked(event: java.awt.event.MouseEvent) {
+                        if (SwingUtilities.isLeftMouseButton(event)) {
+                            Platform.runLater { togglePlayback() }
+                        }
+                    }
+                },
+            )
+        }
+        val centerPlayLayer = JPanel(GridBagLayout()).apply {
+            isOpaque = false
+            add(awtCenterPlayButton)
+            addMouseListener(
+                object : MouseAdapter() {
+                    override fun mouseClicked(event: java.awt.event.MouseEvent) {
+                        if (SwingUtilities.isLeftMouseButton(event)) {
+                            Platform.runLater { togglePlayback() }
+                        }
+                    }
+                },
+            )
+        }
+        overlay.add(centerPlayLayer, BorderLayout.CENTER)
+        // Keep the controls as children of the painted video surface. Swing
+        // always invokes paintChildren after paintComponent, so every captured
+        // video frame is guaranteed to stay behind the control overlay.
+        videoSurface.layout = BorderLayout()
+        videoSurface.add(overlay, BorderLayout.CENTER)
+        return videoSurface
+    }
+
+    private fun setSliderValueAtPointer(slider: JSlider, pointerX: Int) {
+        val usableWidth = (slider.width - SLIDER_POINTER_PADDING * 2).coerceAtLeast(1)
+        val fraction = ((pointerX - SLIDER_POINTER_PADDING).toDouble() / usableWidth)
+            .coerceIn(0.0, 1.0)
+        slider.value = (
+            slider.minimum + fraction * (slider.maximum - slider.minimum)
+        ).roundToInt()
+    }
+
+    private fun seekToAwtSliderPosition() {
+        val value = awtSeekSlider.value
+        Platform.runLater {
+            val player = mediaPlayer ?: return@runLater
+            val duration = player.totalDuration.safeSeconds()
+            if (duration > 0.0) {
+                player.seek(Duration.seconds(duration * value / SEEK_RANGE))
+                emitPlayback()
+            }
+        }
+    }
+
+    private fun styleAwtButton(button: JButton, action: () -> Unit) {
+        button.apply {
+            foreground = AWT_TEXT
+            font = hoshiraFont(Font.BOLD, 15f)
+            isFocusPainted = false
+            preferredSize = Dimension(46, 46)
+            maximumSize = Dimension(46, 46)
+            cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+            addActionListener { action() }
+        }
+    }
+
+    private fun installAwtKeyboardActions() {
+        fun bind(keyStroke: KeyStroke, name: String, action: () -> Unit) {
+            getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(keyStroke, name)
+            actionMap.put(name, object : AbstractAction() {
+                override fun actionPerformed(event: java.awt.event.ActionEvent?) = action()
+            })
+        }
+        bind(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "hoshira-exit-fullscreen") {
+            if (fullscreen) {
+                emitAction(EmbeddedPlayerAction.SetFullscreen(false))
+            } else {
+                emitAction(EmbeddedPlayerAction.Back)
+            }
+        }
+        bind(KeyStroke.getKeyStroke(KeyEvent.VK_F, 0), "hoshira-toggle-fullscreen") {
+            emitAction(EmbeddedPlayerAction.SetFullscreen(!fullscreen))
+        }
+        bind(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "hoshira-toggle-playback") {
+            Platform.runLater { togglePlayback() }
+        }
+    }
+
+    private fun installScene() {
+        if (disposed.get()) return
+        val video = MediaView().apply {
+            isPreserveRatio = true
+            isSmooth = true
+        }
+        val sceneRoot = StackPane().apply {
+            style = "-fx-background-color: #000000;"
+            isFocusTraversable = true
+        }
+        video.fitWidthProperty().bind(sceneRoot.widthProperty())
+        video.fitHeightProperty().bind(sceneRoot.heightProperty())
+
+        sceneRoot.children += video
+        sceneRoot.addEventFilter(MouseEvent.MOUSE_MOVED) {
+            showControls()
+        }
+        sceneRoot.addEventFilter(MouseEvent.MOUSE_CLICKED) { event ->
+            if (event.target === sceneRoot || event.target === video) {
+                togglePlayback()
+            }
+            showControls()
+        }
+        sceneRoot.setOnKeyPressed { event ->
+            when (event.code) {
+                KeyCode.SPACE, KeyCode.K -> {
+                    togglePlayback()
+                    event.consume()
+                }
+                KeyCode.LEFT -> seekBy(-10.0)
+                KeyCode.RIGHT -> seekBy(10.0)
+                KeyCode.UP -> changeVolume(0.05)
+                KeyCode.DOWN -> changeVolume(-0.05)
+                KeyCode.F -> emitAction(EmbeddedPlayerAction.SetFullscreen(!fullscreen))
+                KeyCode.ESCAPE -> {
+                    if (fullscreen) {
+                        emitAction(EmbeddedPlayerAction.SetFullscreen(false))
+                    } else {
+                        emitAction(EmbeddedPlayerAction.Back)
+                    }
+                }
+                else -> Unit
+            }
+        }
+
+        root = sceneRoot
+        mediaView = video
+        video.mediaPlayer = mediaPlayer
+        fxPanel.scene = Scene(
+            sceneRoot,
+            CAPTURE_WIDTH.toDouble(),
+            CAPTURE_HEIGHT.toDouble(),
+            Color.BLACK,
+        )
+        updateChrome(requestedChrome)
+        when (mediaPlayer?.status) {
+            MediaPlayer.Status.READY,
+            MediaPlayer.Status.PLAYING,
+            MediaPlayer.Status.PAUSED,
+            MediaPlayer.Status.STOPPED,
+            -> {
+                hideStatus()
+                updatePlaybackPosition()
+                startFrameCapture()
+                playButton?.text =
+                    if (mediaPlayer?.status == MediaPlayer.Status.PLAYING) "❚❚" else "▶"
+                showControls(permanent = mediaPlayer?.status != MediaPlayer.Status.PLAYING)
+            }
+            else -> showResolving()
+        }
+        debugSession.record(
+            "JavaFX decoder scene installed size=${CAPTURE_WIDTH}x$CAPTURE_HEIGHT " +
+                "playerAttached=${video.mediaPlayer != null}",
+        )
+        requestSurfaceRepaint()
+    }
+
+    private fun scheduleSceneInstall(reason: String) {
+        if (disposed.get() || sceneInstalled.get()) return
+        EventQueue.invokeLater {
+            if (disposed.get() || sceneInstalled.get()) return@invokeLater
+            val width = this@NativeDesktopPlayerPanel.width
+            val height = this@NativeDesktopPlayerPanel.height
+            if (width <= 0 || height <= 0) {
+                debugSession.record(
+                    "JavaFX scene deferred reason=$reason size=${width}x$height",
+                )
+                return@invokeLater
+            }
+            if (!sceneInstallScheduled.compareAndSet(false, true)) {
+                return@invokeLater
+            }
+            debugSession.record(
+                "JavaFX scene scheduling reason=$reason size=${width}x$height",
+            )
+            Platform.runLater {
+                try {
+                    Platform.setImplicitExit(false)
+                    if (!disposed.get() && sceneInstalled.compareAndSet(false, true)) {
+                        installScene()
+                    }
+                } catch (error: Throwable) {
+                    sceneInstalled.set(false)
+                    debugSession.record(
+                        "JavaFX decoder scene failed type=${error.javaClass.simpleName} " +
+                            "message=${error.message ?: "unknown"}",
+                    )
+                } finally {
+                    sceneInstallScheduled.set(false)
+                }
+            }
+        }
+    }
+
+    private fun createChrome(): StackPane {
+        val backButton = playerButton("←").apply {
+            setOnAction { emitAction(EmbeddedPlayerAction.Back) }
+        }
+        val heading = VBox(2.0).apply {
+            alignment = Pos.CENTER_LEFT
+        }
+        titleLabel = Label().apply {
+            style = TITLE_STYLE
+        }
+        subtitleLabel = Label().apply {
+            style = MUTED_LABEL_STYLE
+        }
+        heading.children.addAll(titleLabel, subtitleLabel)
+
+        sourceMenu = MenuButton().apply {
+            style = MENU_STYLE
+        }
+        fullscreenButton = playerButton("⛶").apply {
+            setOnAction {
+                emitAction(EmbeddedPlayerAction.SetFullscreen(!fullscreen))
+            }
+        }
+        val upper = HBox(12.0).apply {
+            padding = Insets(20.0, 22.0, 18.0, 22.0)
+            alignment = Pos.CENTER_LEFT
+            style = TOP_GRADIENT_STYLE
+            children.addAll(backButton, heading, sourceMenu, fullscreenButton)
+        }
+        HBox.setHgrow(heading, Priority.ALWAYS)
+        topBar = upper
+
+        seekSlider = Slider(0.0, SEEK_RANGE, 0.0).apply {
+            maxWidth = Double.MAX_VALUE
+            style = SLIDER_STYLE
+            addEventHandler(MouseEvent.MOUSE_PRESSED) {
+                seeking = true
+                controlsTimer?.stop()
+            }
+            addEventHandler(MouseEvent.MOUSE_RELEASED) {
+                seekToSliderPosition()
+                seeking = false
+                scheduleControlsHide()
+            }
+        }
+        previousButton = playerButton("⏮").apply {
+            setOnAction { emitAction(EmbeddedPlayerAction.Previous) }
+        }
+        playButton = playerButton("▶").apply {
+            setOnAction { togglePlayback() }
+        }
+        nextButton = playerButton("⏭").apply {
+            setOnAction { emitAction(EmbeddedPlayerAction.Next) }
+        }
+        elapsedLabel = Label("00:00 / 00:00").apply {
+            minWidth = 118.0
+            style = LABEL_STYLE
+        }
+        qualityLabel = Label("HLS").apply {
+            style = BADGE_STYLE
+        }
+        val volumeGlyph = Label("🔊").apply {
+            style = LABEL_STYLE
+        }
+        volumeSlider = Slider(0.0, 1.0, requestedChrome.startupVolume.toDouble()).apply {
+            prefWidth = 110.0
+            style = SLIDER_STYLE
+            valueProperty().addListener { _, _, value ->
+                mediaPlayer?.volume = value.toDouble().coerceIn(0.0, 1.0)
+            }
+        }
+        val playbackRow = HBox(10.0).apply {
+            alignment = Pos.CENTER_LEFT
+            children.addAll(
+                previousButton,
+                playButton,
+                nextButton,
+                elapsedLabel,
+                qualityLabel,
+                HBox().apply { HBox.setHgrow(this, Priority.ALWAYS) },
+                volumeGlyph,
+                volumeSlider,
+            )
+        }
+        val lower = VBox(9.0).apply {
+            padding = Insets(26.0, 22.0, 20.0, 22.0)
+            style = BOTTOM_GRADIENT_STYLE
+            children.addAll(seekSlider, playbackRow)
+        }
+        bottomBar = lower
+
+        statusLabel = Label().apply {
+            style = STATUS_STYLE
+            isWrapText = true
+            maxWidth = 520.0
+        }
+        statusSpinner = ProgressIndicator().apply {
+            prefWidth = 38.0
+            prefHeight = 38.0
+            style = "-fx-progress-color: #e84393;"
+        }
+        val statusBox = VBox(15.0).apply {
+            alignment = Pos.CENTER
+            isMouseTransparent = true
+            children.addAll(statusSpinner, statusLabel)
+        }
+        val border = BorderPane().apply {
+            isPickOnBounds = false
+            top = upper
+            bottom = lower
+        }
+        return StackPane(border, statusBox).apply {
+            isPickOnBounds = false
+        }
+    }
+
+    private fun startResolution(
+        keepCurrentFrame: Boolean = false,
+        resumeSeconds: Double? = null,
+        volume: Double? = null,
+    ) {
+        val currentGeneration = generation.incrementAndGet()
+        if (!keepCurrentFrame) {
+            Platform.runLater {
+                frameCaptureTimer?.stop()
+                frameCaptureTimer = null
+                snapshotImage = null
+                snapshotBuffers = null
+            }
+            EventQueue.invokeLater {
+                videoSurface.frame = null
+                videoSurface.setLoading(true)
+                videoSurface.repaint()
+            }
+        }
+        debugSession.restart()
+        debugSession.record(
+                "Swing surface displayable=$isDisplayable " +
+                "showing=$isShowing size=${width}x$height " +
+                "sceneInstalled=${sceneInstalled.get()} " +
+                "prism=${System.getProperty("prism.order", "default")}",
+        )
+        debugSession.record(
+            "primary=${requestedUrl.hlsDebugUrl()} sources=${requestedChrome.sources.size} " +
+                "fallbacks=${requestedChrome.fallbackPlayerPageUrls.size}",
+        )
+        requestedChrome.sources.forEachIndexed { index, source ->
+            val diagnostic = resolver.inspect(source.playerPageUrl)
+            debugSession.record(
+                "source[$index] label=${source.label} selected=${source.selected} " +
+                    "provider=${diagnostic.provider.displayName} " +
+                    "supported=${diagnostic.supported} " +
+                    "detail=${diagnostic.detail ?: "none"} " +
+                    "url=${source.playerPageUrl?.hlsDebugUrl() ?: "<none>"}",
+            )
+        }
+        requestedChrome.fallbackPlayerPageUrls.forEachIndexed { index, fallbackUrl ->
+            val diagnostic = resolver.inspect(fallbackUrl)
+            debugSession.record(
+                "fallback[$index] provider=${diagnostic.provider.displayName} " +
+                    "supported=${diagnostic.supported} " +
+                    "detail=${diagnostic.detail ?: "none"} " +
+                    "url=${fallbackUrl.hlsDebugUrl()}",
+            )
+        }
+        val urls = candidateUrls(requestedUrl, requestedChrome)
+            .filter(resolver::supports)
+            .toList()
+        debugSession.record(
+            "playable=${urls.size} candidates=" +
+                urls.joinToString { it.hlsDebugUrl() },
+        )
+        if (!keepCurrentFrame) {
+            notifyState(EmbeddedPlayerState.Starting)
+            Platform.runLater {
+                showResolving()
+            }
+        }
+        if (urls.isEmpty()) {
+            fail(
+                currentGeneration,
+                unavailableSourceMessage(requestedUrl, requestedChrome),
+            )
+            return
+        }
+
+        thread(name = "hoshira-hls-resolver", isDaemon = true) {
+            var lastError: Throwable? = null
+            var resolvedUrl: String? = null
+            var resolvedSourceUrl: String? = null
+            var resolvedQuality: String? = null
+            var resolvedQualities: List<String> = emptyList()
+            val preferredQuality = selectedQualityOverride ?: requestedChrome.preferredQuality
+            for (url in urls) {
+                val diagnostic = resolver.inspect(url)
+                debugSession.record(
+                    "attempt provider=${diagnostic.provider.displayName} " +
+                        "url=${url.hlsDebugUrl()}",
+                )
+                val result = runCatching {
+                    resolver.resolve(
+                        url = url,
+                        preferredVoice = requestedChrome.preferredVoice,
+                        preferredQuality = preferredQuality,
+                    )
+                }
+                result.onSuccess { source ->
+                    resolvedUrl = url
+                    resolvedSourceUrl = source.url
+                    resolvedQuality = source.quality
+                    resolvedQualities = source.availableQualities
+                }.onFailure { error ->
+                    lastError = error
+                    debugSession.record(
+                        "attempt failed provider=${diagnostic.provider.displayName} " +
+                            "type=${error.javaClass.simpleName} " +
+                            "message=${error.message ?: "unknown"}",
+                    )
+                }
+                if (resolvedSourceUrl != null) break
+            }
+            if (disposed.get() || generation.get() != currentGeneration) return@thread
+            val mediaUrl = resolvedSourceUrl
+            val requestUrl = resolvedUrl
+            if (mediaUrl != null && requestUrl != null) {
+                Platform.runLater {
+                    if (!disposed.get() && generation.get() == currentGeneration) {
+                        activeRequestUrl = requestUrl
+                        updateChrome(requestedChrome)
+                        openMedia(
+                            hlsUrl = mediaUrl,
+                            currentGeneration = currentGeneration,
+                            quality = resolvedQuality,
+                            qualities = resolvedQualities,
+                            resumeSeconds = resumeSeconds,
+                            volume = volume,
+                        )
+                    }
+                }
+            } else {
+                val error = lastError
+                fail(
+                    currentGeneration,
+                    error?.message ?: "Не удалось подготовить HLS-поток.",
+                    error,
+                )
+            }
+        }
+    }
+
+    private fun candidateUrls(
+        primaryUrl: String,
+        chrome: EmbeddedPlayerChrome,
+    ): Sequence<String> = sequenceOf(primaryUrl)
+        .plus(chrome.sources.asSequence().mapNotNull(EmbeddedPlayerSource::playerPageUrl))
+        .plus(chrome.fallbackPlayerPageUrls.asSequence())
+        .distinct()
+
+    private fun unavailableSourceMessage(
+        primaryUrl: String,
+        chrome: EmbeddedPlayerChrome,
+    ): String {
+        val providers = candidateUrls(primaryUrl, chrome)
+            .map(resolver::inspect)
+            .map { it.provider.displayName }
+            .filterNot { it == "Неизвестный" || it == "Некорректная ссылка" }
+            .distinct()
+            .toList()
+        return if ("Alloha" in providers) {
+            "Найден Alloha, но его поток требует JavaScript/WebSocket и " +
+                "динамических заголовков. Подробности есть в диагностике."
+        } else if (providers.isNotEmpty()) {
+            "Найдены источники ${providers.joinToString()}, но получить прямой HLS не удалось."
+        } else {
+            "Для этой серии не найден поддерживаемый HLS-источник."
+        }
+    }
+
+    private fun openMedia(
+        hlsUrl: String,
+        currentGeneration: Long,
+        quality: String?,
+        qualities: List<String>,
+        resumeSeconds: Double?,
+        volume: Double?,
+    ) {
+        try {
+            debugSession.record("JavaFX Media opening ${hlsUrl.hlsDebugUrl()}")
+            frameCaptureTimer?.stop()
+            frameCaptureTimer = null
+            mediaPlayer?.stop()
+            mediaPlayer?.dispose()
+            val media = Media(hlsUrl)
+            val player = MediaPlayer(media)
+            mediaPlayer = player
+            mediaView?.mediaPlayer = player
+            player.volume = (volume ?: requestedChrome.startupVolume.toDouble())
+                .coerceIn(0.0, 1.0)
+            volumeSlider?.value = player.volume
+            EventQueue.invokeLater {
+                awtVolumeSlider.value = (player.volume * 100).toInt().coerceIn(0, 100)
+            }
+            activeQuality = quality
+            availableQualities = qualities
+            updateQualityControls()
+            player.onReady = Runnable {
+                if (disposed.get() || generation.get() != currentGeneration) return@Runnable
+                (resumeSeconds ?: requestedChrome.resumeSeconds)
+                    .takeIf { it > 0.0 }
+                    ?.let { player.seek(Duration.seconds(it)) }
+                hideStatus()
+                debugSession.record(
+                    "JavaFX ready duration=${player.totalDuration.safeSeconds()}s " +
+                        "media=${media.width}x${media.height} " +
+                        "view=${mediaView?.fitWidth?.toInt()}x${mediaView?.fitHeight?.toInt()} " +
+                        "tracks=${media.tracks.joinToString { it.javaClass.simpleName }}",
+                )
+                startFrameCapture()
+                notifyState(EmbeddedPlayerState.Ready)
+                player.play()
+                root?.requestFocus()
+                requestSurfaceRepaint()
+            }
+            player.onPlaying = Runnable {
+                debugSession.record("JavaFX playing")
+                frameCaptureTimer?.play()
+                hideStatus()
+                playButton?.text = "❚❚"
+                EventQueue.invokeLater {
+                    awtPlayButton.glyph = PlayerGlyph.Pause
+                    awtCenterPlayButton.isVisible = false
+                }
+                scheduleControlsHide()
+            }
+            player.onStalled = Runnable {
+                debugSession.record(
+                    "JavaFX stalled position=${player.currentTime.safeSeconds()}s " +
+                        "buffered=${player.bufferProgressTime.safeSeconds()}s",
+                )
+                frameCaptureTimer?.pause()
+                showResolving()
+            }
+            player.onPaused = Runnable {
+                frameCaptureTimer?.pause()
+                playButton?.text = "▶"
+                EventQueue.invokeLater {
+                    awtPlayButton.glyph = PlayerGlyph.Play
+                    awtCenterPlayButton.isVisible = true
+                }
+                showControls(permanent = true)
+                emitPlayback()
+            }
+            player.onStopped = Runnable {
+                frameCaptureTimer?.pause()
+                playButton?.text = "▶"
+                EventQueue.invokeLater {
+                    awtPlayButton.glyph = PlayerGlyph.Play
+                    awtCenterPlayButton.isVisible = true
+                }
+                emitPlayback()
+            }
+            player.onEndOfMedia = Runnable {
+                frameCaptureTimer?.pause()
+                emitPlayback()
+                if (requestedChrome.autoplayNext && requestedChrome.hasNext) {
+                    emitAction(EmbeddedPlayerAction.Next)
+                } else {
+                    showControls(permanent = true)
+                    playButton?.text = "↻"
+                    EventQueue.invokeLater {
+                        awtPlayButton.glyph = PlayerGlyph.Play
+                        awtCenterPlayButton.isVisible = true
+                    }
+                }
+            }
+            player.onError = Runnable {
+                fail(
+                    currentGeneration,
+                    player.error?.message ?: "JavaFX Media не смог открыть HLS-поток.",
+                    player.error,
+                )
+            }
+            media.setOnError {
+                fail(
+                    currentGeneration,
+                    media.error?.message ?: "Источник вернул неподдерживаемый медиапоток.",
+                    media.error,
+                )
+            }
+            player.currentTimeProperty().addListener { _, _, _ ->
+                updatePlaybackPosition()
+            }
+        } catch (error: Exception) {
+            fail(
+                currentGeneration,
+                error.message ?: "Не удалось запустить HLS-поток.",
+                error,
+            )
+        }
+    }
+
+    private fun startFrameCapture() {
+        val video = mediaView ?: return
+        frameCaptureTimer?.stop()
+        val surfaceWidth = videoSurface.width.coerceAtLeast(MIN_CAPTURE_WIDTH)
+        val surfaceHeight = videoSurface.height.coerceAtLeast(MIN_CAPTURE_HEIGHT)
+        val boundedDisplayWidth = minOf(surfaceWidth, surfaceHeight * 16 / 9)
+        snapshotWidth = minOf(CAPTURE_OPTIMAL_WIDTH, boundedDisplayWidth)
+            .coerceAtLeast(MIN_CAPTURE_WIDTH)
+            .let { it - it % 2 }
+        snapshotHeight = (snapshotWidth * 9 / 16)
+            .coerceAtLeast(MIN_CAPTURE_HEIGHT)
+            .let { it - it % 2 }
+        snapshotImage = WritableImage(snapshotWidth, snapshotHeight)
+        snapshotBuffers = Array(3) {
+            BufferedImage(
+                snapshotWidth,
+                snapshotHeight,
+                BufferedImage.TYPE_INT_ARGB_PRE,
+            )
+        }
+        snapshotWriteIndex = 0
+        firstFrameLogged = false
+        val parameters = SnapshotParameters().apply {
+            fill = Color.BLACK
+            transform = Transform.scale(
+                snapshotWidth.toDouble() / CAPTURE_WIDTH,
+                snapshotHeight.toDouble() / CAPTURE_HEIGHT,
+            )
+        }
+        frameCaptureTimer = Timeline(
+            KeyFrame(
+                Duration.millis(FRAME_CAPTURE_INTERVAL_MS),
+                EventHandler { captureVideoFrame(video, parameters) },
+            ),
+        ).apply {
+            cycleCount = Timeline.INDEFINITE
+            play()
+        }
+        debugSession.record(
+            "Swing frame capture started ${snapshotWidth}x$snapshotHeight " +
+                "interval=${"%.2f".format(FRAME_CAPTURE_INTERVAL_MS)}ms",
+        )
+    }
+
+    private fun captureVideoFrame(
+        video: MediaView,
+        parameters: SnapshotParameters,
+    ) {
+        if (disposed.get()) return
+        if (mediaPlayer?.status != MediaPlayer.Status.PLAYING) return
+        val image = snapshotImage ?: return
+        val buffers = snapshotBuffers ?: return
+        var targetIndex = -1
+        for (offset in buffers.indices) {
+            val candidateIndex = (snapshotWriteIndex + offset) % buffers.size
+            if (!videoSurface.isFrameInUse(buffers[candidateIndex])) {
+                targetIndex = candidateIndex
+                break
+            }
+        }
+        if (targetIndex < 0) return
+        val target = buffers[targetIndex]
+        try {
+            video.snapshot(parameters, image)
+            val pixels = (target.raster.dataBuffer as DataBufferInt).data
+            image.pixelReader.getPixels(
+                0,
+                0,
+                snapshotWidth,
+                snapshotHeight,
+                PixelFormat.getIntArgbPreInstance(),
+                pixels,
+                0,
+                snapshotWidth,
+            )
+            videoSurface.presentFrame(target)
+            snapshotWriteIndex = (targetIndex + 1) % buffers.size
+            if (!firstFrameLogged) {
+                firstFrameLogged = true
+                debugSession.record("Swing first video frame captured")
+            }
+        } catch (error: Throwable) {
+            frameCaptureTimer?.stop()
+            debugSession.record(
+                "Swing frame capture failed type=${error.javaClass.simpleName} " +
+                    "message=${error.message ?: "unknown"}",
+            )
+        }
+    }
+
+    private fun updateChrome(chrome: EmbeddedPlayerChrome) {
+        titleLabel?.text = chrome.title
+        subtitleLabel?.text = listOf(chrome.subtitle, chrome.position)
+            .filter(String::isNotBlank)
+            .joinToString(" · ")
+        previousButton?.isDisable = !chrome.hasPrevious
+        nextButton?.isDisable = !chrome.hasNext
+        fullscreenButton?.text = if (fullscreen) "🗗" else "⛶"
+
+        val allSources = chrome.sources.filter { source ->
+            resolver.supports(source.playerPageUrl) || isDeferredPlayerSource(source.label)
+        }
+        val playableSources = allSources.filter { resolver.supports(it.playerPageUrl) }
+        val selectedSource = playableSources.firstOrNull {
+            it.playerPageUrl == activeRequestUrl
+        } ?: playableSources.firstOrNull { it.selected }
+            ?: playableSources.firstOrNull()
+        sourceMenu?.apply {
+            text = selectedSource?.label ?: "HLS"
+            items.setAll(
+                allSources.map { source ->
+                    val supported = resolver.supports(source.playerPageUrl)
+                    MenuItem(
+                        if (supported) source.label else "${source.label} — $DEFERRED_PLAYER_NOTE",
+                    ).apply {
+                        isDisable = !supported || source.episodeId == selectedSource?.episodeId
+                        setOnAction {
+                            emitAction(EmbeddedPlayerAction.SelectSource(source.episodeId))
+                        }
+                    }
+                },
+            )
+            isVisible = allSources.size > 1
+            isManaged = isVisible
+        }
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            awtTitleLabel.text = chrome.title
+            awtSubtitleLabel.text = chrome.subtitle
+            awtEpisodeLabel.text = chrome.position
+            awtNextButton.isEnabled = chrome.hasNext
+            awtFullscreenButton.glyph =
+                if (fullscreen) PlayerGlyph.ExitFullscreen else PlayerGlyph.Fullscreen
+            awtSourceUpdate = true
+            try {
+                awtSourceIds = allSources.map(EmbeddedPlayerSource::episodeId)
+                awtSourceEnabled = allSources.map { resolver.supports(it.playerPageUrl) }
+                awtSourceSelector.removeAllItems()
+                allSources.forEachIndexed { index, source ->
+                    awtSourceSelector.addItem(
+                        if (awtSourceEnabled[index]) {
+                            source.label
+                        } else {
+                            "${source.label} — $DEFERRED_PLAYER_NOTE"
+                        },
+                    )
+                }
+                awtSelectedSourceIndex = if (allSources.isEmpty()) {
+                    -1
+                } else {
+                    allSources.indexOfFirst {
+                        it.episodeId == selectedSource?.episodeId
+                    }.takeIf { it >= 0 } ?: 0
+                }
+                awtSourceSelector.selectedIndex = awtSelectedSourceIndex
+                awtSourceSelector.isVisible = allSources.isNotEmpty()
+            } finally {
+                awtSourceUpdate = false
+            }
+        }
+    }
+
+    private fun updateQualityControls() {
+        val current = activeQuality
+        qualityLabel?.text = current?.let { "HLS · $it" } ?: "HLS"
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            awtQualityUpdate = true
+            try {
+                awtQualitySelector.removeAllItems()
+                val options = availableQualities.ifEmpty {
+                    listOf(current ?: selectedQualityOverride ?: "Авто")
+                }
+                options.forEach(awtQualitySelector::addItem)
+                awtQualitySelector.selectedItem = current
+                    ?.takeIf(options::contains)
+                    ?: selectedQualityOverride?.takeIf(options::contains)
+                    ?: options.first()
+                awtQualitySelector.isEnabled = options.size > 1
+                awtQualitySelector.isVisible = true
+            } finally {
+                awtQualityUpdate = false
+            }
+        }
+    }
+
+    private fun selectQuality(quality: String) {
+        if (quality == activeQuality || quality !in availableQualities) return
+        val resumeSeconds = mediaPlayer?.currentTime?.safeSeconds()
+        val volume = mediaPlayer?.volume
+        selectedQualityOverride = quality
+        debugSession.record(
+            "quality switch from=${activeQuality ?: "unknown"} to=$quality " +
+                "resume=${resumeSeconds ?: 0.0}s",
+        )
+        startResolution(
+            keepCurrentFrame = true,
+            resumeSeconds = resumeSeconds,
+            volume = volume,
+        )
+    }
+
+    private fun updatePlaybackPosition() {
+        val player = mediaPlayer ?: return
+        val now = System.nanoTime()
+        if (now - lastPlaybackUiUpdateNanos < PLAYBACK_UI_UPDATE_NANOS) return
+        lastPlaybackUiUpdateNanos = now
+        val position = player.currentTime.safeSeconds()
+        val duration = player.totalDuration.safeSeconds()
+        if (!seeking && duration > 0.0) {
+            seekSlider?.value = (position / duration * SEEK_RANGE).coerceIn(0.0, SEEK_RANGE)
+        }
+        elapsedLabel?.text = "${position.clockText()} / ${duration.clockText()}"
+        EventQueue.invokeLater {
+            if (!awtSeeking && duration > 0.0) {
+                awtSeekSlider.value =
+                    (position / duration * SEEK_RANGE).toInt().coerceIn(0, SEEK_RANGE.toInt())
+            }
+            awtElapsedLabel.text = "${position.clockText()} / ${duration.clockText()}"
+        }
+        if (now - lastPlaybackNotificationNanos >= PLAYBACK_NOTIFICATION_NANOS) {
+            lastPlaybackNotificationNanos = now
+            emitPlayback()
+        }
+    }
+
+    private fun seekToSliderPosition() {
+        val player = mediaPlayer ?: return
+        val duration = player.totalDuration.safeSeconds()
+        if (duration <= 0.0) return
+        val fraction = (seekSlider?.value ?: 0.0) / SEEK_RANGE
+        player.seek(Duration.seconds(duration * fraction))
+        emitPlayback()
+    }
+
+    private fun seekBy(deltaSeconds: Double) {
+        val player = mediaPlayer ?: return
+        val duration = player.totalDuration.safeSeconds()
+        val target = (player.currentTime.safeSeconds() + deltaSeconds)
+            .coerceIn(0.0, duration.takeIf { it > 0.0 } ?: Double.MAX_VALUE)
+        player.seek(Duration.seconds(target))
+        showControls()
+    }
+
+    private fun changeVolume(delta: Double) {
+        val slider = volumeSlider ?: return
+        slider.value = (slider.value + delta).coerceIn(0.0, 1.0)
+        showControls()
+    }
+
+    private fun togglePlayback() {
+        val player = mediaPlayer ?: return
+        when (player.status) {
+            MediaPlayer.Status.PLAYING -> player.pause()
+            MediaPlayer.Status.READY,
+            MediaPlayer.Status.PAUSED,
+            MediaPlayer.Status.STOPPED,
+            -> player.play()
+            else -> Unit
+        }
+    }
+
+    private fun showResolving() {
+        statusLabel?.isVisible = false
+        statusLabel?.isManaged = false
+        statusSpinner?.isVisible = true
+        statusSpinner?.isManaged = true
+        EventQueue.invokeLater {
+            awtCenterPlayButton.isVisible = false
+            videoSurface.setLoading(true)
+        }
+        showControls(permanent = true)
+    }
+
+    private fun hideStatus() {
+        statusLabel?.isVisible = false
+        statusLabel?.isManaged = false
+        statusSpinner?.isVisible = false
+        statusSpinner?.isManaged = false
+        EventQueue.invokeLater {
+            videoSurface.setLoading(false)
+        }
+    }
+
+    private fun showControls(permanent: Boolean = false) {
+        topBar?.apply {
+            opacity = 1.0
+            isMouseTransparent = false
+        }
+        bottomBar?.apply {
+            opacity = 1.0
+            isMouseTransparent = false
+        }
+        root?.cursor = Cursor.DEFAULT
+        controlsTimer?.stop()
+        if (!permanent) scheduleControlsHide()
+    }
+
+    private fun scheduleControlsHide() {
+        val player = mediaPlayer ?: return
+        if (player.status != MediaPlayer.Status.PLAYING) return
+        controlsTimer?.stop()
+        controlsTimer = PauseTransition(
+            Duration.millis(requestedChrome.controlsHideDelayMs.coerceAtLeast(1_200).toDouble()),
+        ).apply {
+            setOnFinished {
+                topBar?.apply {
+                    opacity = 0.0
+                    isMouseTransparent = true
+                }
+                bottomBar?.apply {
+                    opacity = 0.0
+                    isMouseTransparent = true
+                }
+                root?.cursor = Cursor.NONE
+            }
+            playFromStart()
+        }
+    }
+
+    private fun fail(
+        currentGeneration: Long,
+        message: String,
+        error: Throwable? = null,
+    ) {
+        if (disposed.get() || generation.get() != currentGeneration) return
+        debugSession.record(
+            "FAILED type=${error?.javaClass?.simpleName ?: "none"} message=$message",
+        )
+        Platform.runLater {
+            if (disposed.get() || generation.get() != currentGeneration) return@runLater
+            mediaPlayer?.stop()
+            mediaPlayer?.dispose()
+            mediaPlayer = null
+            mediaView?.mediaPlayer = null
+            frameCaptureTimer?.stop()
+            frameCaptureTimer = null
+            statusSpinner?.isVisible = false
+            statusSpinner?.isManaged = false
+            statusLabel?.text = message
+            statusLabel?.isVisible = true
+            statusLabel?.isManaged = true
+            EventQueue.invokeLater {
+                awtCenterPlayButton.isVisible = false
+                videoSurface.setLoading(false)
+                videoSurface.repaint()
+            }
+            notifyState(
+                EmbeddedPlayerState.Failed(
+                    message = message,
+                    debugInfo = debugSession.report(),
+                ),
+            )
+        }
+    }
+
+    private fun emitPlayback(callback: (EmbeddedPlayerAction) -> Unit = actionCallback) {
+        val player = mediaPlayer ?: return
+        val position = player.currentTime.safeSeconds()
+        val duration = player.totalDuration.safeSeconds()
+        EventQueue.invokeLater {
+            callback(
+                EmbeddedPlayerAction.Playback(
+                    positionSeconds = position,
+                    durationSeconds = duration,
+                    volume = player.volume.toFloat(),
+                    quality = activeQuality,
+                ),
+            )
+        }
+    }
+
+    private fun notifyState(state: EmbeddedPlayerState) {
+        EventQueue.invokeLater {
+            if (!disposed.get()) stateCallback(state)
+        }
+    }
+
+    private fun emitAction(action: EmbeddedPlayerAction) {
+        EventQueue.invokeLater {
+            if (!disposed.get()) actionCallback(action)
+        }
+    }
+
+    private fun requestSurfaceRepaint() {
+        EventQueue.invokeLater {
+            if (disposed.get()) return@invokeLater
+            fxPanel.revalidate()
+            fxPanel.repaint()
+            videoSurface.revalidate()
+            videoSurface.repaint()
+            revalidate()
+            repaint()
+        }
+    }
+}
+
+private class ChromeOverlayPanel : JPanel() {
+    init {
+        isOpaque = false
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            val topHeight = minOf(154, height.coerceAtLeast(1))
+            graphics2D.paint = LinearGradientPaint(
+                Point2D.Float(0f, 0f),
+                Point2D.Float(0f, topHeight.toFloat()),
+                floatArrayOf(0f, 0.48f, 1f),
+                arrayOf(
+                    AwtColor(3, 4, 6, 224),
+                    AwtColor(3, 4, 6, 172),
+                    AwtColor(3, 4, 6, 0),
+                ),
+            )
+            graphics2D.fillRect(0, 0, width, topHeight)
+            val bottomHeight = minOf(220, height.coerceAtLeast(1))
+            val lowerStart = (height - bottomHeight).coerceAtLeast(0)
+            graphics2D.paint = LinearGradientPaint(
+                Point2D.Float(0f, lowerStart.toFloat()),
+                Point2D.Float(0f, height.coerceAtLeast(1).toFloat()),
+                floatArrayOf(0f, 0.52f, 1f),
+                arrayOf(
+                    AwtColor(3, 4, 6, 0),
+                    AwtColor(3, 4, 6, 180),
+                    AwtColor(3, 4, 6, 245),
+                ),
+            )
+            graphics2D.fillRect(0, lowerStart, width, height - lowerStart)
+        } finally {
+            graphics2D.dispose()
+        }
+        super.paintComponent(graphics)
+    }
+}
+
+private class PillControlPanel : JPanel(BorderLayout()) {
+    init {
+        isOpaque = false
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            val arc = (height - 4).coerceAtLeast(12)
+            graphics2D.color = AwtColor(18, 19, 23)
+            graphics2D.fillRoundRect(1, 1, width - 3, height - 3, arc, arc)
+            graphics2D.color = AwtColor(255, 255, 255, 28)
+            graphics2D.drawRoundRect(1, 1, width - 3, height - 3, arc, arc)
+        } finally {
+            graphics2D.dispose()
+        }
+        super.paintComponent(graphics)
+    }
+}
+
+private class ThreeZoneControls(
+    private val leftControls: JComponent,
+    private val centerControls: JComponent,
+    private val rightControls: JComponent,
+) : JPanel(null) {
+    init {
+        isOpaque = false
+        add(leftControls)
+        add(centerControls)
+        add(rightControls)
+    }
+
+    override fun getPreferredSize(): Dimension = Dimension(
+        leftControls.preferredSize.width + centerControls.preferredSize.width +
+            rightControls.preferredSize.width,
+        maxOf(
+            leftControls.preferredSize.height,
+            centerControls.preferredSize.height,
+            rightControls.preferredSize.height,
+        ),
+    )
+
+    override fun doLayout() {
+        val left = leftControls.preferredSize
+        val center = centerControls.preferredSize
+        val right = rightControls.preferredSize
+        leftControls.setBounds(0, (height - left.height) / 2, left.width, left.height)
+        centerControls.setBounds(
+            ((width - center.width) / 2).coerceAtLeast(left.width + 8),
+            (height - center.height) / 2,
+            center.width,
+            center.height,
+        )
+        rightControls.setBounds(
+            (width - right.width).coerceAtLeast(left.width + center.width + 16),
+            (height - right.height) / 2,
+            right.width,
+            right.height,
+        )
+    }
+}
+
+private class AwtVideoSurface : JPanel() {
+    private val repaintQueued = AtomicBoolean(false)
+    private val frameVersion = AtomicLong()
+
+    @Volatile
+    var frame: BufferedImage? = null
+
+    @Volatile
+    private var paintingFrame: BufferedImage? = null
+
+    @Volatile
+    private var loading = true
+
+    private var loaderAngle = 0
+    private val loaderTimer = javax.swing.Timer(50) {
+        loaderAngle = (loaderAngle + 18) % 360
+        repaintLoader()
+    }.apply {
+        isCoalesce = true
+        start()
+    }
+
+    init {
+        background = AwtColor.BLACK
+        isOpaque = true
+        minimumSize = Dimension(1, 1)
+    }
+
+    @Synchronized
+    fun presentFrame(image: BufferedImage) {
+        frame = image
+        frameVersion.incrementAndGet()
+        if (repaintQueued.compareAndSet(false, true)) {
+            repaint()
+        }
+    }
+
+    @Synchronized
+    fun isFrameInUse(image: BufferedImage): Boolean =
+        image === frame || image === paintingFrame
+
+    fun setLoading(value: Boolean) {
+        loading = value
+        if (value) {
+            if (!loaderTimer.isRunning) loaderTimer.start()
+        } else {
+            loaderTimer.stop()
+        }
+        repaint()
+    }
+
+    fun disposeSurface() {
+        loaderTimer.stop()
+        frame = null
+    }
+
+    private fun repaintLoader() {
+        val size = LOADER_DIAMETER + LOADER_STROKE * 4
+        repaint(
+            (width - size) / 2,
+            (height - size) / 2,
+            size,
+            size,
+        )
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val paintedVersion = frameVersion.get()
+        val imageToPaint = synchronized(this) {
+            frame.also { paintingFrame = it }
+        }
+        super.paintComponent(graphics)
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            graphics2D.color = AwtColor.BLACK
+            graphics2D.fillRect(0, 0, width, height)
+            imageToPaint?.let { image ->
+                val scale = minOf(
+                    width.toDouble() / image.width.coerceAtLeast(1),
+                    height.toDouble() / image.height.coerceAtLeast(1),
+                )
+                val drawWidth = (image.width * scale).toInt().coerceAtLeast(1)
+                val drawHeight = (image.height * scale).toInt().coerceAtLeast(1)
+                val drawX = (width - drawWidth) / 2
+                val drawY = (height - drawHeight) / 2
+                graphics2D.setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_BILINEAR,
+                )
+                graphics2D.drawImage(
+                    image,
+                    drawX,
+                    drawY,
+                    drawWidth,
+                    drawHeight,
+                    null,
+                )
+            }
+            if (loading) {
+                val diameter = LOADER_DIAMETER.toDouble()
+                val x = (width - diameter) / 2.0
+                val y = (height - diameter) / 2.0
+                graphics2D.stroke = BasicStroke(
+                    LOADER_STROKE.toFloat(),
+                    BasicStroke.CAP_ROUND,
+                    BasicStroke.JOIN_ROUND,
+                )
+                graphics2D.color = AwtColor(255, 255, 255, 42)
+                graphics2D.draw(Arc2D.Double(x, y, diameter, diameter, 0.0, 360.0, Arc2D.OPEN))
+                graphics2D.color = AWT_ACCENT
+                graphics2D.draw(
+                    Arc2D.Double(
+                        x,
+                        y,
+                        diameter,
+                        diameter,
+                        loaderAngle.toDouble(),
+                        250.0,
+                        Arc2D.OPEN,
+                    ),
+                )
+            }
+        } finally {
+            synchronized(this) {
+                if (paintingFrame === imageToPaint) paintingFrame = null
+            }
+            graphics2D.dispose()
+            repaintQueued.set(false)
+            if (paintedVersion != frameVersion.get() && repaintQueued.compareAndSet(false, true)) {
+                repaint()
+            }
+        }
+    }
+}
+
+private class EllipsizedLabel(
+    private val characterLimit: Int,
+) : JLabel() {
+    override fun setText(value: String?) {
+        val text = value.orEmpty()
+        super.setText(
+            if (characterLimit > 3 && text.length > characterLimit) {
+                text.take(characterLimit - 1).trimEnd() + "…"
+            } else {
+                text
+            },
+        )
+    }
+}
+
+private class HoshiraPlayerButton(
+    text: String = "",
+    private val accent: Boolean = false,
+    private val pill: Boolean = false,
+    private val circular: Boolean = false,
+    glyph: PlayerGlyph? = null,
+) : JButton(text) {
+    var glyph: PlayerGlyph? = glyph
+        set(value) {
+            field = value
+            repaint()
+        }
+
+    init {
+        isOpaque = false
+        isContentAreaFilled = false
+        isBorderPainted = false
+        isRolloverEnabled = true
+        margin = java.awt.Insets(0, 0, 0, 0)
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            val fill = when {
+                !isEnabled -> AWT_CONTROL_DISABLED
+                model.isPressed -> if (accent) AWT_ACCENT_PRESSED else AWT_CONTROL_PRESSED
+                model.isRollover -> if (accent) AWT_ACCENT_HOVER else AWT_CONTROL_HOVER
+                accent -> AWT_ACCENT
+                else -> AWT_CONTROL
+            }
+            val arc = if (pill) height.coerceAtLeast(14) else 14
+            val diameter = (minOf(width, height) - 4).coerceAtLeast(1)
+            val mainShape = if (circular) {
+                Ellipse2D.Double(
+                    ((width - diameter) / 2).toDouble(),
+                    1.0,
+                    diameter.toDouble(),
+                    diameter.toDouble(),
+                )
+            } else {
+                RoundRectangle2D.Double(
+                    1.0,
+                    1.0,
+                    (width - 2).coerceAtLeast(1).toDouble(),
+                    (height - 4).coerceAtLeast(1).toDouble(),
+                    arc.toDouble(),
+                    arc.toDouble(),
+                )
+            }
+            val shadowShape = if (circular) {
+                Ellipse2D.Double(
+                    ((width - diameter) / 2).toDouble(),
+                    3.0,
+                    diameter.toDouble(),
+                    diameter.toDouble(),
+                )
+            } else {
+                RoundRectangle2D.Double(
+                    2.0,
+                    4.0,
+                    (width - 4).coerceAtLeast(1).toDouble(),
+                    (height - 6).coerceAtLeast(1).toDouble(),
+                    arc.toDouble(),
+                    arc.toDouble(),
+                )
+            }
+            graphics2D.color = AwtColor(0, 0, 0, if (accent) 82 else 48)
+            graphics2D.fill(shadowShape)
+            graphics2D.color = fill
+            graphics2D.fill(mainShape)
+            if (!accent) {
+                graphics2D.color = if (model.isRollover) AWT_BORDER_HOVER else AWT_BORDER
+                graphics2D.draw(mainShape)
+            }
+        } finally {
+            graphics2D.dispose()
+        }
+        super.paintComponent(graphics)
+        glyph?.let { drawPlayerGlyph(graphics, it, isEnabled) }
+    }
+}
+
+private enum class PlayerGlyph {
+    Play,
+    Pause,
+    RewindTen,
+    ForwardTen,
+    Next,
+    Volume,
+    Muted,
+    Fullscreen,
+    ExitFullscreen,
+}
+
+private fun HoshiraPlayerButton.drawPlayerGlyph(
+    graphics: Graphics,
+    glyph: PlayerGlyph,
+    enabled: Boolean,
+) {
+    val graphics2D = graphics.create() as Graphics2D
+    try {
+        enableHighQualityRendering(graphics2D)
+        graphics2D.color = if (enabled) AWT_TEXT else AwtColor(247, 247, 250, 110)
+        graphics2D.stroke = BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+        val centerX = width / 2.0
+        val centerY = height / 2.0 - 1.0
+        when (glyph) {
+            PlayerGlyph.Play -> graphics2D.fill(
+                Path2D.Double().apply {
+                    moveTo(centerX - 5, centerY - 8)
+                    lineTo(centerX + 8, centerY)
+                    lineTo(centerX - 5, centerY + 8)
+                    closePath()
+                },
+            )
+            PlayerGlyph.Pause -> {
+                graphics2D.fillRoundRect((centerX - 7).toInt(), (centerY - 8).toInt(), 5, 16, 2, 2)
+                graphics2D.fillRoundRect((centerX + 2).toInt(), (centerY - 8).toInt(), 5, 16, 2, 2)
+            }
+            PlayerGlyph.RewindTen,
+            PlayerGlyph.ForwardTen,
+            -> drawTenSecondGlyph(graphics2D, centerX, centerY, glyph == PlayerGlyph.ForwardTen)
+            PlayerGlyph.Next -> {
+                graphics2D.drawLine(
+                    (centerX - 3).toInt(),
+                    (centerY - 7).toInt(),
+                    (centerX + 4).toInt(),
+                    centerY.toInt(),
+                )
+                graphics2D.drawLine(
+                    (centerX + 4).toInt(),
+                    centerY.toInt(),
+                    (centerX - 3).toInt(),
+                    (centerY + 7).toInt(),
+                )
+            }
+            PlayerGlyph.Volume,
+            PlayerGlyph.Muted,
+            -> drawVolumeGlyph(
+                graphics2D,
+                centerX - 3.0,
+                centerY,
+                glyph == PlayerGlyph.Muted,
+            )
+            PlayerGlyph.Fullscreen,
+            PlayerGlyph.ExitFullscreen,
+            -> drawFullscreenGlyph(
+                graphics2D,
+                centerX,
+                centerY,
+                glyph == PlayerGlyph.ExitFullscreen,
+            )
+        }
+    } finally {
+        graphics2D.dispose()
+    }
+}
+
+private fun drawTenSecondGlyph(
+    graphics: Graphics2D,
+    centerX: Double,
+    centerY: Double,
+    forward: Boolean,
+) {
+    graphics.stroke = BasicStroke(2.35f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+    val start = if (forward) 305.0 else -125.0
+    val extent = if (forward) -260.0 else 260.0
+    graphics.draw(Arc2D.Double(centerX - 9, centerY - 9, 18.0, 18.0, start, extent, Arc2D.OPEN))
+    val arrow = Path2D.Double().apply {
+        if (forward) {
+            moveTo(centerX + 6.5, centerY - 8.5)
+            lineTo(centerX + 10.5, centerY - 4.0)
+            lineTo(centerX + 4.0, centerY - 3.5)
+        } else {
+            moveTo(centerX - 6.5, centerY - 8.5)
+            lineTo(centerX - 10.5, centerY - 4.0)
+            lineTo(centerX - 4.0, centerY - 3.5)
+        }
+        closePath()
+    }
+    graphics.fill(arrow)
+    graphics.font = hoshiraFont(Font.BOLD, 8.5f)
+    val text = "10"
+    val metrics = graphics.fontMetrics
+    graphics.drawString(
+        text,
+        (centerX - metrics.stringWidth(text) / 2.0).toFloat(),
+        (centerY + metrics.ascent / 2.0).toFloat(),
+    )
+}
+
+private fun drawVolumeGlyph(
+    graphics: Graphics2D,
+    centerX: Double,
+    centerY: Double,
+    muted: Boolean,
+) {
+    graphics.fill(
+        Path2D.Double().apply {
+            moveTo(centerX - 9, centerY - 3)
+            lineTo(centerX - 5, centerY - 3)
+            lineTo(centerX + 1, centerY - 8)
+            lineTo(centerX + 1, centerY + 8)
+            lineTo(centerX - 5, centerY + 3)
+            lineTo(centerX - 9, centerY + 3)
+            closePath()
+        },
+    )
+    if (muted) {
+        graphics.drawLine((centerX + 6).toInt(), (centerY - 5).toInt(), (centerX + 12).toInt(), (centerY + 5).toInt())
+        graphics.drawLine((centerX + 12).toInt(), (centerY - 5).toInt(), (centerX + 6).toInt(), (centerY + 5).toInt())
+    } else {
+        graphics.draw(Arc2D.Double(centerX - 4, centerY - 7, 14.0, 14.0, -48.0, 96.0, Arc2D.OPEN))
+        graphics.draw(Arc2D.Double(centerX - 5, centerY - 10, 20.0, 20.0, -43.0, 86.0, Arc2D.OPEN))
+    }
+}
+
+private fun drawFullscreenGlyph(
+    graphics: Graphics2D,
+    centerX: Double,
+    centerY: Double,
+    exit: Boolean,
+) {
+    val outer = 9
+    val inner = 3
+    val cx = centerX.toInt()
+    val cy = centerY.toInt()
+    if (!exit) {
+        graphics.drawLine(cx - outer, cy - inner, cx - outer, cy - outer)
+        graphics.drawLine(cx - outer, cy - outer, cx - inner, cy - outer)
+        graphics.drawLine(cx + inner, cy - outer, cx + outer, cy - outer)
+        graphics.drawLine(cx + outer, cy - outer, cx + outer, cy - inner)
+        graphics.drawLine(cx - outer, cy + inner, cx - outer, cy + outer)
+        graphics.drawLine(cx - outer, cy + outer, cx - inner, cy + outer)
+        graphics.drawLine(cx + inner, cy + outer, cx + outer, cy + outer)
+        graphics.drawLine(cx + outer, cy + outer, cx + outer, cy + inner)
+    } else {
+        graphics.drawLine(cx - outer, cy - inner, cx - inner, cy - inner)
+        graphics.drawLine(cx - inner, cy - inner, cx - inner, cy - outer)
+        graphics.drawLine(cx + outer, cy - inner, cx + inner, cy - inner)
+        graphics.drawLine(cx + inner, cy - inner, cx + inner, cy - outer)
+        graphics.drawLine(cx - outer, cy + inner, cx - inner, cy + inner)
+        graphics.drawLine(cx - inner, cy + inner, cx - inner, cy + outer)
+        graphics.drawLine(cx + outer, cy + inner, cx + inner, cy + inner)
+        graphics.drawLine(cx + inner, cy + inner, cx + inner, cy + outer)
+    }
+}
+
+private class HoshiraComboBoxUi : BasicComboBoxUI() {
+    override fun paintCurrentValueBackground(
+        graphics: Graphics,
+        bounds: java.awt.Rectangle,
+        hasFocus: Boolean,
+    ) = Unit
+
+    override fun createArrowButton(): JButton = ComboArrowButton().apply {
+        preferredSize = Dimension(28, 28)
+        isFocusable = false
+    }
+
+    override fun createPopup(): ComboPopup {
+        val popup = object : BasicComboPopup(comboBox) {
+            override fun computePopupBounds(
+                px: Int,
+                py: Int,
+                pw: Int,
+                ph: Int,
+            ): java.awt.Rectangle {
+                val renderer = list.cellRenderer
+                val widestCell = (0 until list.model.size).maxOfOrNull { index ->
+                    renderer.getListCellRendererComponent(
+                        list,
+                        list.model.getElementAt(index),
+                        index,
+                        false,
+                        false,
+                    ).preferredSize.width
+                } ?: 0
+                val popupWidth = maxOf(pw, widestCell + POPUP_HORIZONTAL_PADDING)
+                    .coerceAtMost(MAX_SOURCE_POPUP_WIDTH)
+                return super.computePopupBounds(px, py, popupWidth, ph)
+            }
+        }
+        (popup as? BasicComboPopup)?.apply {
+            isOpaque = true
+            background = AWT_CONTROL_HIGH
+            border = BorderFactory.createEmptyBorder()
+            components
+                .filterIsInstance<javax.swing.JScrollPane>()
+                .firstOrNull()
+                ?.apply {
+                    isOpaque = true
+                    background = AWT_CONTROL_HIGH
+                    border = BorderFactory.createEmptyBorder()
+                    viewport.isOpaque = true
+                    viewport.background = AWT_CONTROL_HIGH
+                }
+            list.background = AWT_CONTROL_HIGH
+            list.foreground = AWT_TEXT
+            list.selectionBackground = AWT_CONTROL_HOVER
+            list.selectionForeground = AWT_TEXT
+            list.addListSelectionListener { list.repaint() }
+            addPopupMenuListener(
+                object : PopupMenuListener {
+                    override fun popupMenuWillBecomeVisible(event: PopupMenuEvent?) {
+                        EventQueue.invokeLater {
+                            val popupWindow = SwingUtilities.getWindowAncestor(this@apply)
+                            val ownerWindow = SwingUtilities.getWindowAncestor(comboBox)
+                            if (
+                                popupWindow != null &&
+                                popupWindow !== ownerWindow &&
+                                popupWindow.width > 0 &&
+                                popupWindow.height > 0
+                            ) {
+                                runCatching {
+                                    popupWindow.background = AWT_CONTROL_HIGH
+                                    (popupWindow as? javax.swing.RootPaneContainer)?.let { rootHost ->
+                                        rootHost.rootPane.apply {
+                                            border = BorderFactory.createEmptyBorder()
+                                            isOpaque = true
+                                            background = AWT_CONTROL_HIGH
+                                        }
+                                        (rootHost.contentPane as? JComponent)?.apply {
+                                            border = BorderFactory.createEmptyBorder()
+                                            isOpaque = true
+                                            background = AWT_CONTROL_HIGH
+                                        }
+                                    }
+                                    popupWindow.shape = RoundRectangle2D.Double(
+                                        0.0,
+                                        0.0,
+                                        popupWindow.width.toDouble(),
+                                        popupWindow.height.toDouble(),
+                                        18.0,
+                                        18.0,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    override fun popupMenuWillBecomeInvisible(event: PopupMenuEvent?) = Unit
+
+                    override fun popupMenuCanceled(event: PopupMenuEvent?) = Unit
+                },
+            )
+        }
+        return popup
+    }
+}
+
+private class ComboArrowButton : JButton() {
+    init {
+        isOpaque = false
+        isContentAreaFilled = false
+        isBorderPainted = false
+        margin = java.awt.Insets(0, 0, 0, 0)
+    }
+
+    override fun paintComponent(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            graphics2D.color = AWT_MUTED
+            graphics2D.stroke = BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            val centerX = width / 2
+            val centerY = height / 2
+            graphics2D.drawLine(centerX - 5, centerY - 2, centerX, centerY + 3)
+            graphics2D.drawLine(centerX, centerY + 3, centerX + 5, centerY - 2)
+        } finally {
+            graphics2D.dispose()
+        }
+    }
+}
+
+private class HoshiraComboRenderer(
+    private val accent: Boolean = false,
+    private val prefix: String? = null,
+    private val centerClosedValue: Boolean = false,
+) : DefaultListCellRenderer() {
+    override fun getListCellRendererComponent(
+        list: JList<*>?,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ): java.awt.Component {
+        val label = super.getListCellRendererComponent(
+            list,
+            value,
+            index,
+            isSelected,
+            cellHasFocus,
+        ) as JLabel
+        label.background = if (isSelected) AWT_CONTROL_HOVER else AWT_CONTROL_HIGH
+        val unavailable = value?.toString()?.let(::isDeferredPlayerSource) ?: false
+        label.foreground = when {
+            unavailable -> AwtColor(255, 255, 255, 105)
+            accent && index < 0 -> AWT_ACCENT
+            else -> AWT_TEXT
+        }
+        label.font = hoshiraFont(Font.BOLD, 12f)
+        label.border = if (index < 0) {
+            BorderFactory.createEmptyBorder()
+        } else {
+            BorderFactory.createEmptyBorder(7, 10, 7, 10)
+        }
+        label.isOpaque = index >= 0
+        label.horizontalAlignment =
+            if (index < 0 && centerClosedValue) SwingConstants.CENTER else SwingConstants.LEFT
+        if (index < 0 && !prefix.isNullOrBlank()) {
+            label.text = "$prefix   ${value?.toString().orEmpty()}"
+        }
+        return label
+    }
+}
+
+private class HoshiraSliderUi(slider: JSlider) : BasicSliderUI(slider) {
+    override fun calculateThumbSize() {
+        thumbRect.setSize(14, 14)
+    }
+
+    override fun paintTrack(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            val y = trackRect.y + (trackRect.height - 4) / 2
+            graphics2D.color = AWT_SLIDER_TRACK
+            graphics2D.fillRoundRect(trackRect.x, y, trackRect.width, 4, 4, 4)
+            val range = (slider.maximum - slider.minimum).coerceAtLeast(1)
+            val fraction = (slider.value - slider.minimum).toDouble() / range
+            val fillWidth = (trackRect.width * fraction).toInt().coerceIn(0, trackRect.width)
+            graphics2D.color = AWT_ACCENT
+            graphics2D.fillRoundRect(trackRect.x, y, fillWidth, 4, 4, 4)
+        } finally {
+            graphics2D.dispose()
+        }
+    }
+
+    override fun paintThumb(graphics: Graphics) {
+        val graphics2D = graphics.create() as Graphics2D
+        try {
+            enableHighQualityRendering(graphics2D)
+            graphics2D.color = AwtColor(0, 0, 0, 90)
+            graphics2D.fillOval(
+                thumbRect.x - 2,
+                thumbRect.y + 2,
+                thumbRect.width + 4,
+                thumbRect.height + 4,
+            )
+            graphics2D.color = AWT_ACCENT
+            graphics2D.fillOval(thumbRect.x, thumbRect.y, thumbRect.width, thumbRect.height)
+            graphics2D.color = AWT_TEXT
+            graphics2D.drawOval(thumbRect.x, thumbRect.y, thumbRect.width - 1, thumbRect.height - 1)
+        } finally {
+            graphics2D.dispose()
+        }
+    }
+}
+
+private fun playerButton(text: String): Button = Button(text).apply {
+    minWidth = 42.0
+    minHeight = 38.0
+    style = BUTTON_STYLE
+}
+
+private fun Duration.safeSeconds(): Double =
+    toSeconds().takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+
+private fun Double.clockText(): String {
+    val totalSeconds = takeIf { it.isFinite() && it >= 0.0 }?.roundToLong() ?: 0L
+    val hours = totalSeconds / 3_600
+    val minutes = totalSeconds % 3_600 / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%d:%02d".format(minutes, seconds)
+    }
+}
+
+private fun enableHighQualityRendering(graphics: Graphics2D) {
+    graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+    graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB)
+    graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+    graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+}
+
+private fun loadHoshiraFont(resource: String, fallbackStyle: Int): Font =
+    runCatching {
+        NativeDesktopPlayerPanel::class.java.getResourceAsStream(resource)
+            ?.use { Font.createFont(Font.TRUETYPE_FONT, it) }
+            ?: error("Bundled Hoshira font not found")
+    }.getOrElse { Font(Font.SANS_SERIF, fallbackStyle, 12) }
+
+private val HOSHIRA_MEDIUM_FONT: Font by lazy {
+    loadHoshiraFont(HOSHIRA_MEDIUM_FONT_RESOURCE, Font.PLAIN)
+}
+
+private val HOSHIRA_EXTRABOLD_FONT: Font by lazy {
+    loadHoshiraFont(HOSHIRA_EXTRABOLD_FONT_RESOURCE, Font.BOLD)
+}
+
+private fun hoshiraFont(style: Int, size: Float): Font =
+    (if (style and Font.BOLD != 0) HOSHIRA_EXTRABOLD_FONT else HOSHIRA_MEDIUM_FONT)
+        .deriveFont(Font.PLAIN, size)
+
+private const val SEEK_RANGE = 1_000.0
+private const val CAPTURE_WIDTH = 960
+private const val CAPTURE_HEIGHT = 540
+private const val CAPTURE_OPTIMAL_WIDTH = 960
+private const val MIN_CAPTURE_WIDTH = 640
+private const val MIN_CAPTURE_HEIGHT = 360
+private const val FRAME_CAPTURE_INTERVAL_MS = 1_000.0 / 24.0
+private const val PLAYBACK_UI_UPDATE_NANOS = 100_000_000L
+private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
+private const val POPUP_HORIZONTAL_PADDING = 28
+private const val MAX_SOURCE_POPUP_WIDTH = 420
+private const val LOADER_DIAMETER = 38
+private const val LOADER_STROKE = 3
+private const val SLIDER_POINTER_PADDING = 7
+private const val MAX_TITLE_CHARACTERS = 68
+private const val HOSHIRA_MEDIUM_FONT_RESOURCE =
+    "/composeResources/app.hoshira.desktop.desktopapp.generated.resources/font/montserrat_medium.ttf"
+private const val HOSHIRA_EXTRABOLD_FONT_RESOURCE =
+    "/composeResources/app.hoshira.desktop.desktopapp.generated.resources/font/montserrat_extrabold.ttf"
+private val AWT_TEXT = AwtColor(0xF7, 0xF7, 0xFA)
+private val AWT_MUTED = AwtColor(0xB9, 0xBA, 0xC5)
+private val AWT_ACCENT = AwtColor(0xFF, 0x6A, 0x00)
+private val AWT_ACCENT_HOVER = AwtColor(0xFF, 0x7D, 0x21)
+private val AWT_ACCENT_PRESSED = AwtColor(0xE8, 0x57, 0x00)
+private val AWT_CONTROL = AwtColor(27, 29, 34)
+private val AWT_CONTROL_HIGH = AwtColor(18, 19, 23)
+private val AWT_CONTROL_HOVER = AwtColor(49, 51, 58)
+private val AWT_CONTROL_PRESSED = AwtColor(0x18, 0x19, 0x1E)
+private val AWT_CONTROL_DISABLED = AwtColor(0x19, 0x1A, 0x1F)
+private val AWT_BORDER = AwtColor(255, 255, 255, 35)
+private val AWT_BORDER_HOVER = AwtColor(0x5B, 0x5D, 0x69)
+private val AWT_SLIDER_TRACK = AwtColor(255, 255, 255, 55)
+private const val LABEL_STYLE =
+    "-fx-text-fill: #f7f7fa; -fx-font-size: 13px; -fx-font-weight: 700;"
+private const val MUTED_LABEL_STYLE =
+    "-fx-text-fill: #b9bac5; -fx-font-size: 12px;"
+private const val TITLE_STYLE =
+    "-fx-text-fill: white; -fx-font-size: 17px; -fx-font-weight: 800;"
+private const val STATUS_STYLE =
+    "-fx-text-fill: white; -fx-font-size: 16px; -fx-font-weight: 700;" +
+        "-fx-background-color: rgba(18,18,24,0.84); -fx-background-radius: 14px;" +
+        "-fx-padding: 12px 18px; -fx-alignment: center;"
+private const val BUTTON_STYLE =
+    "-fx-background-color: rgba(31,31,40,0.82); -fx-background-radius: 11px;" +
+        "-fx-text-fill: white; -fx-font-size: 15px; -fx-font-weight: 800;" +
+        "-fx-cursor: hand;"
+private const val MENU_STYLE =
+    "-fx-background-color: rgba(31,31,40,0.82); -fx-background-radius: 11px;" +
+        "-fx-text-fill: white; -fx-font-size: 12px; -fx-font-weight: 700;" +
+        "-fx-cursor: hand;"
+private const val BADGE_STYLE =
+    "-fx-text-fill: #ff8fc8; -fx-font-size: 11px; -fx-font-weight: 800;" +
+        "-fx-background-color: rgba(232,67,147,0.18); -fx-background-radius: 8px;" +
+        "-fx-padding: 5px 8px;"
+private const val SLIDER_STYLE = "-fx-accent: #e84393;"
+private const val TOP_GRADIENT_STYLE =
+    "-fx-background-color: linear-gradient(to bottom, rgba(0,0,0,0.88), transparent);"
+private const val BOTTOM_GRADIENT_STYLE =
+    "-fx-background-color: linear-gradient(to top, rgba(0,0,0,0.92), transparent);"

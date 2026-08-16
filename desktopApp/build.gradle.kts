@@ -7,7 +7,7 @@ plugins {
     id("org.jetbrains.compose")
 }
 
-group = "dev.aniliberty.desktop"
+group = "app.hoshira.desktop"
 
 val hostOs = System.getProperty("os.name").lowercase()
 val targetOs = providers.gradleProperty("hoshira.targetOs")
@@ -29,7 +29,7 @@ kotlin {
             "linux" -> {
                 kotlin.srcDir("src/linuxMain/kotlin")
                 kotlin.exclude(
-                    "dev/aniliberty/desktop/WindowsWindowStyle.kt",
+                    "app/hoshira/desktop/WindowsWindowStyle.kt",
                 )
             }
             else -> error("Desktop target '$targetOs' is not configured yet")
@@ -71,7 +71,7 @@ dependencies {
 
 compose.desktop {
     application {
-        mainClass = "dev.aniliberty.desktop.MainKt"
+        mainClass = "app.hoshira.desktop.MainKt"
         // Coil discovers network fetchers through ServiceLoader, while JNA
         // reflects native interface signatures. ProGuard shrinking/optimization
         // breaks both mechanisms, so desktop releases favor correctness here.
