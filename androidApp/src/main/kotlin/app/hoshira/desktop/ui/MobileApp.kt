@@ -59,6 +59,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -72,6 +74,7 @@ import app.hoshira.desktop.AppController
 import app.hoshira.desktop.AppRoute
 import app.hoshira.desktop.UiState
 import app.hoshira.desktop.data.AccountLibrary
+import app.hoshira.desktop.data.AnimeMembership
 import app.hoshira.desktop.data.AnimeListKind
 import app.hoshira.desktop.data.CatalogFilters
 import app.hoshira.desktop.data.CatalogSort
@@ -158,11 +161,25 @@ fun HoshiraMobileApp(
                     )
                     is AppRoute.Details -> MobileDetailsScreen(
                         state = controller.detailsState,
+                        membershipState = controller.animeMembershipState,
+                        accountSignedIn = controller.accountState is AccountState.SignedIn,
+                        accountActionInProgress = controller.accountActionInProgress,
+                        accountActionError = controller.accountActionError,
                         onBack = controller::closeDetails,
                         onRetry = {
                             scope.launch { controller.showDetails(route.releaseId) }
                         },
                         onPlayEpisode = controller::playEpisode,
+                        onSetAnimeList = { list ->
+                            scope.launch { controller.setAnimeList(list) }
+                        },
+                        onToggleFavorite = {
+                            scope.launch { controller.toggleAnimeFavorite() }
+                        },
+                        onOpenAccount = {
+                            controller.closeDetails()
+                            selectedTab = MobileTab.Profile
+                        },
                     )
                     else -> {
                         when (selectedTab) {
@@ -905,9 +922,16 @@ private fun MobileSignedInProfile(
 @Composable
 private fun MobileDetailsScreen(
     state: UiState<ReleaseDto>,
+    membershipState: UiState<AnimeMembership>,
+    accountSignedIn: Boolean,
+    accountActionInProgress: Boolean,
+    accountActionError: String?,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onPlayEpisode: (EpisodeDto) -> Unit,
+    onSetAnimeList: (AnimeListKind?) -> Unit,
+    onToggleFavorite: () -> Unit,
+    onOpenAccount: () -> Unit,
 ) {
     when (state) {
         UiState.Loading -> MobileLoading("Загружаем релиз…")
@@ -1044,6 +1068,17 @@ private fun MobileDetailsScreen(
                     }
                 }
                 item {
+                    MobileMembershipActions(
+                        membershipState = membershipState,
+                        accountSignedIn = accountSignedIn,
+                        accountActionInProgress = accountActionInProgress,
+                        accountActionError = accountActionError,
+                        onSetAnimeList = onSetAnimeList,
+                        onToggleFavorite = onToggleFavorite,
+                        onOpenAccount = onOpenAccount,
+                    )
+                }
+                item {
                     Column(
                         Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 18.dp),
                     ) {
@@ -1138,6 +1173,269 @@ private fun MobileDetailsScreen(
                         Text("▶", color = AniColors.OrangeBright)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileMembershipActions(
+    membershipState: UiState<AnimeMembership>,
+    accountSignedIn: Boolean,
+    accountActionInProgress: Boolean,
+    accountActionError: String?,
+    onSetAnimeList: (AnimeListKind?) -> Unit,
+    onToggleFavorite: () -> Unit,
+    onOpenAccount: () -> Unit,
+) {
+    val membership = (membershipState as? UiState.Ready)?.value
+    val membershipError = accountActionError
+        ?: (membershipState as? UiState.Error)?.message
+    val actionsEnabled = !accountActionInProgress && membershipState !is UiState.Loading
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Моя библиотека",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            if (accountActionInProgress || membershipState is UiState.Loading) {
+                Spacer(Modifier.width(10.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = AniColors.OrangeBright,
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+        Spacer(Modifier.height(11.dp))
+
+        if (!accountSignedIn) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(CircleShape)
+                    .background(AniColors.SurfaceHigh)
+                    .border(1.dp, AniColors.Border, CircleShape)
+                    .clickable(onClick = onOpenAccount)
+                    .padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MobileHeartIcon(
+                    filled = false,
+                    color = AniColors.OrangeBright,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text("Войти, чтобы сохранять тайтлы", fontWeight = FontWeight.Bold)
+            }
+            return@Column
+        }
+
+        MobileAnimeListDropdown(
+            selected = membership?.list,
+            enabled = actionsEnabled,
+            onSelected = onSetAnimeList,
+        )
+        Spacer(Modifier.height(10.dp))
+        val isFavorite = membership?.isFavorite == true
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isFavorite) AniColors.Orange.copy(alpha = 0.16f) else AniColors.SurfaceHigh,
+                )
+                .border(
+                    1.dp,
+                    if (isFavorite) AniColors.Orange else AniColors.Border,
+                    CircleShape,
+                )
+                .clickable(enabled = actionsEnabled, onClick = onToggleFavorite)
+                .padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MobileHeartIcon(
+                filled = isFavorite,
+                color = AniColors.OrangeBright,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                if (isFavorite) "В любимом" else "Добавить в любимое",
+                color = if (actionsEnabled) AniColors.Text else AniColors.TextMuted,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        if (membershipError != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                membershipError,
+                color = Color(0xFFFF7777),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileHeartIcon(
+    filled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier) {
+        val heart = Path().apply {
+            moveTo(size.width * 0.5f, size.height * 0.9f)
+            cubicTo(
+                size.width * 0.42f,
+                size.height * 0.82f,
+                size.width * 0.1f,
+                size.height * 0.62f,
+                size.width * 0.1f,
+                size.height * 0.36f,
+            )
+            cubicTo(
+                size.width * 0.1f,
+                size.height * 0.19f,
+                size.width * 0.23f,
+                size.height * 0.1f,
+                size.width * 0.37f,
+                size.height * 0.1f,
+            )
+            cubicTo(
+                size.width * 0.45f,
+                size.height * 0.1f,
+                size.width * 0.49f,
+                size.height * 0.16f,
+                size.width * 0.5f,
+                size.height * 0.24f,
+            )
+            cubicTo(
+                size.width * 0.51f,
+                size.height * 0.16f,
+                size.width * 0.55f,
+                size.height * 0.1f,
+                size.width * 0.63f,
+                size.height * 0.1f,
+            )
+            cubicTo(
+                size.width * 0.77f,
+                size.height * 0.1f,
+                size.width * 0.9f,
+                size.height * 0.19f,
+                size.width * 0.9f,
+                size.height * 0.36f,
+            )
+            cubicTo(
+                size.width * 0.9f,
+                size.height * 0.62f,
+                size.width * 0.58f,
+                size.height * 0.82f,
+                size.width * 0.5f,
+                size.height * 0.9f,
+            )
+            close()
+        }
+        if (filled) {
+            drawPath(heart, color = color)
+        } else {
+            drawPath(
+                path = heart,
+                color = color,
+                style = Stroke(
+                    width = 2.2.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileAnimeListDropdown(
+    selected: AnimeListKind?,
+    enabled: Boolean,
+    onSelected: (AnimeListKind?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .clip(CircleShape)
+                .background(AniColors.SurfaceHigh)
+                .border(
+                    1.dp,
+                    if (expanded) AniColors.Orange else AniColors.Border,
+                    CircleShape,
+                )
+                .clickable(enabled = enabled) { expanded = true }
+                .padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                selected?.title ?: "Добавить в список",
+                modifier = Modifier.weight(1f),
+                color = if (enabled) AniColors.Text else AniColors.TextMuted,
+                fontWeight = FontWeight.Bold,
+            )
+            DropdownChevron(
+                expanded = expanded,
+                color = if (enabled) AniColors.OrangeBright else AniColors.TextMuted,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = AniColors.SurfaceHigh,
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            AnimeListKind.entries
+                .filterNot { it == AnimeListKind.Favorite }
+                .forEach { kind ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                kind.title,
+                                color = if (kind == selected) {
+                                    AniColors.OrangeBright
+                                } else {
+                                    AniColors.Text
+                                },
+                                fontWeight = if (kind == selected) {
+                                    FontWeight.ExtraBold
+                                } else {
+                                    FontWeight.Medium
+                                },
+                            )
+                        },
+                        onClick = {
+                            expanded = false
+                            onSelected(kind)
+                        },
+                    )
+                }
+            if (selected != null) {
+                DropdownMenuItem(
+                    text = {
+                        Text("Убрать из списка", color = Color(0xFFFF7777), fontWeight = FontWeight.Bold)
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelected(null)
+                    },
+                )
             }
         }
     }
