@@ -15,10 +15,18 @@ class ReleaseModelsTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test
-    fun `protocol relative Yani media URL becomes HTTPS`() {
+    fun `static Yani media URL uses direct image proxy`() {
         assertEquals(
-            "https://static.yani.tv/posters/full/poster.jpg",
+            "https://imgproxy.yani.tv/posters/full/poster.jpg",
             "//static.yani.tv/posters/full/poster.jpg".asAbsoluteYaniUrl(),
+        )
+    }
+
+    @Test
+    fun `absolute static Yani media URL uses direct image proxy`() {
+        assertEquals(
+            "https://imgproxy.yani.tv/posters/full/poster.jpg?size=medium",
+            "https://static.yani.tv/posters/full/poster.jpg?size=medium".asAbsoluteYaniUrl(),
         )
     }
 
@@ -63,7 +71,7 @@ class ReleaseModelsTest {
         )
 
         assertEquals(
-            "https://static.yani.tv/posters/full/1.jpg",
+            "https://imgproxy.yani.tv/posters/full/1.jpg",
             release.backdropUrl,
         )
     }
@@ -105,7 +113,7 @@ class ReleaseModelsTest {
 
         assertEquals(13271, release.id)
         assertEquals("Mushoku Tensei III", release.name.english)
-        assertEquals("https://static.yani.tv/posters/full/1.jpg", release.posterUrl)
+        assertEquals("https://imgproxy.yani.tv/posters/full/1.jpg", release.posterUrl)
         assertEquals("https://i.kodikres.com/1.jpg", release.backdropUrl)
         assertEquals("https://kodikplayer.com/player/42", release.episodes.single().externalPlayerUrl)
         assertTrue(release.isOngoing)

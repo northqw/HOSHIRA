@@ -1013,11 +1013,24 @@ fun RemoteImage(
 ) {
     var retryAttempt by remember(url) { mutableStateOf(0) }
     var failedAttempt by remember(url) { mutableStateOf(-1) }
+    var loadedAttempt by remember(url) { mutableStateOf(-1) }
+    val currentAttempt = retryAttempt
 
-    LaunchedEffect(url, failedAttempt) {
-        if (url != null && failedAttempt == retryAttempt && retryAttempt < IMAGE_RETRY_DELAYS_MS.size) {
-            delay(IMAGE_RETRY_DELAYS_MS[retryAttempt])
-            retryAttempt++
+    LaunchedEffect(url, currentAttempt, failedAttempt, loadedAttempt) {
+        if (
+            url == null ||
+            loadedAttempt == currentAttempt ||
+            currentAttempt >= IMAGE_RETRY_DELAYS_MS.size
+        ) return@LaunchedEffect
+
+        val retryDelay = if (failedAttempt == currentAttempt) {
+            IMAGE_RETRY_DELAYS_MS[currentAttempt]
+        } else {
+            IMAGE_LOAD_TIMEOUT_MS
+        }
+        delay(retryDelay)
+        if (loadedAttempt != currentAttempt && retryAttempt == currentAttempt) {
+            retryAttempt = currentAttempt + 1
         }
     }
 
@@ -1030,16 +1043,19 @@ fun RemoteImage(
         contentAlignment = Alignment.Center,
     ) {
         if (url != null) {
-            key(url, retryAttempt) {
+            key(url, currentAttempt) {
                 AsyncImage(
                     model = url,
                     contentDescription = contentDescription,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = contentScale,
                     filterQuality = filterQuality,
+                    onSuccess = {
+                        loadedAttempt = currentAttempt
+                    },
                     onError = {
-                        if (retryAttempt < IMAGE_RETRY_DELAYS_MS.size) {
-                            failedAttempt = retryAttempt
+                        if (currentAttempt < IMAGE_RETRY_DELAYS_MS.size) {
+                            failedAttempt = currentAttempt
                         }
                     },
                 )
@@ -1056,6 +1072,7 @@ fun RemoteImage(
 }
 
 private val IMAGE_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_500L, 5_000L)
+private const val IMAGE_LOAD_TIMEOUT_MS = 8_000L
 
 @Composable
 fun LoadingState(

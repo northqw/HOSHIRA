@@ -120,9 +120,19 @@ data class HomeFeed(
     val discoveries: List<ReleaseDto>,
 )
 
-fun String.asAbsoluteYaniUrl(): String = when {
-    startsWith("http://") || startsWith("https://") -> this
-    startsWith("//") -> "https:$this"
-    startsWith("/") -> "$YANI_SITE_ORIGIN$this"
-    else -> "$YANI_SITE_ORIGIN/$this"
+fun String.asAbsoluteYaniUrl(): String {
+    val absoluteUrl = when {
+        startsWith("http://") || startsWith("https://") -> this
+        startsWith("//") -> "https:$this"
+        startsWith("/") -> "$YANI_SITE_ORIGIN$this"
+        else -> "$YANI_SITE_ORIGIN/$this"
+    }
+
+    return when {
+        absoluteUrl.startsWith("https://static.yani.tv/") ->
+            "https://imgproxy.yani.tv/${absoluteUrl.removePrefix("https://static.yani.tv/")}"
+        absoluteUrl.startsWith("http://static.yani.tv/") ->
+            "https://imgproxy.yani.tv/${absoluteUrl.removePrefix("http://static.yani.tv/")}"
+        else -> absoluteUrl
+    }
 }
