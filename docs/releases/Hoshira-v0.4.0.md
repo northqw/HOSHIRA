@@ -16,6 +16,6 @@ Hoshira 0.4.0 переводит воспроизведение HLS на нат�
 
 ## Артефакты
 
-- `Hoshira-Android-0.4.0-debug.apk`;
+- `Hoshira-Android-0.4.0-release.apk`;
 - `Hoshira-0.4.0-Windows-portable.zip`;
 - `Hoshira-0.4.0-Setup.exe`.

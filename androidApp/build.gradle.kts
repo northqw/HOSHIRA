@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     kotlin("android")
@@ -19,6 +21,28 @@ val desktopOnlySources = listOf(
     "dev/aniliberty/desktop/ui/EmbeddedPlayerHost.kt",
 ).map { sharedDesktopSourceRoot.resolve(it).normalize() }.toSet()
 
+val releaseSigningProperties = Properties().apply {
+    val propertiesFile = rootProject.file("secrets.properties")
+    if (propertiesFile.isFile) {
+        propertiesFile.inputStream().use(::load)
+    }
+}
+
+fun releaseSigningValue(name: String): String? =
+    releaseSigningProperties.getProperty(name)?.takeIf(String::isNotBlank)
+        ?: providers.environmentVariable(name).orNull?.takeIf(String::isNotBlank)
+
+val releaseStoreFile = releaseSigningValue("HOSHIRA_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSigningValue("HOSHIRA_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningValue("HOSHIRA_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningValue("HOSHIRA_RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it != null }
+
 android {
     namespace = "dev.aniliberty.android"
     compileSdk = 36
@@ -39,6 +63,31 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(requireNotNull(releaseStoreFile))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     packaging {
