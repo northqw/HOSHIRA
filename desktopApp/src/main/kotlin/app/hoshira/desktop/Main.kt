@@ -16,7 +16,13 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import app.hoshira.desktop.data.NetworkReleaseRepository
+import app.hoshira.desktop.data.SharedHttpClient
 import app.hoshira.desktop.ui.HoshiraApp
+import coil3.ImageLoader
+import coil3.compose.setSingletonImageLoaderFactory
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import java.awt.Dimension
 import java.awt.GraphicsConfiguration
 import java.awt.GraphicsEnvironment
@@ -26,6 +32,7 @@ import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.event.KeyEvent
 import kotlinx.coroutines.delay
+import okio.Path.Companion.toPath
 
 fun main() {
     System.setProperty("awt.useSystemAAFontSettings", "lcd")
@@ -70,6 +77,29 @@ fun main() {
             title = "Hoshira",
             state = windowState,
         ) {
+            setSingletonImageLoaderFactory { context ->
+                ImageLoader.Builder(context)
+                    .components {
+                        add(OkHttpNetworkFetcherFactory(callFactory = { SharedHttpClient.images }))
+                    }
+                    .memoryCache {
+                        MemoryCache.Builder()
+                            .maxSizeBytes(DESKTOP_IMAGE_MEMORY_CACHE_BYTES)
+                            .build()
+                    }
+                    .diskCache {
+                        DiskCache.Builder()
+                            .directory(
+                                platformCacheDirectory()
+                                    .resolve("images")
+                                    .toString()
+                                    .toPath(),
+                            )
+                            .maxSizeBytes(DESKTOP_IMAGE_DISK_CACHE_BYTES)
+                            .build()
+                    }
+                    .build()
+            }
             window.minimumSize = windowSizing.minimumSize
             applyHoshiraWindowBackground(window)
 
@@ -167,3 +197,5 @@ private const val DEFAULT_WINDOW_HEIGHT = 930
 private const val MINIMUM_WINDOW_WIDTH = 720
 private const val MINIMUM_WINDOW_HEIGHT = 480
 private const val WINDOW_WORK_AREA_FRACTION = 0.94
+private const val DESKTOP_IMAGE_MEMORY_CACHE_BYTES = 256L * 1024L * 1024L
+private const val DESKTOP_IMAGE_DISK_CACHE_BYTES = 768L * 1024L * 1024L

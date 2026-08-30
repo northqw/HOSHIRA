@@ -11,6 +11,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -47,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -63,14 +66,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
-import coil3.ImageLoader
-import coil3.compose.setSingletonImageLoaderFactory
-import coil3.disk.DiskCache
-import coil3.memory.MemoryCache
 import app.hoshira.desktop.AppController
 import app.hoshira.desktop.AppRoute
 import app.hoshira.desktop.AccountState
-import app.hoshira.desktop.platformCacheDirectory
 import app.hoshira.desktop.isPortableMode
 import app.hoshira.desktop.data.AccountProfile
 import app.hoshira.desktop.data.ReleaseRepository
@@ -78,31 +76,16 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import okio.Path.Companion.toPath
 
 @Composable
 fun HoshiraApp(
     repository: ReleaseRepository,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
+    isTelevision: Boolean = false,
+    platformBackHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    setSingletonImageLoaderFactory { context ->
-        ImageLoader.Builder(context)
-            .memoryCache {
-                MemoryCache.Builder()
-                    .maxSizeBytes(256L * 1024L * 1024L)
-                    .build()
-            }
-            .diskCache {
-                DiskCache.Builder()
-                    .directory(hoshiraImageCachePath())
-                    .maxSizeBytes(768L * 1024L * 1024L)
-                    .build()
-            }
-            .build()
-    }
-
     HoshiraTheme {
         val controller = remember(repository) { AppController(repository) }
         val scope = rememberCoroutineScope()
@@ -112,6 +95,28 @@ fun HoshiraApp(
         val libraryGridState = rememberLazyGridState()
         val accountProfile = (controller.accountState as? AccountState.SignedIn)?.profile
         var showSplash by remember { mutableStateOf(true) }
+        val screenModifier = if (isTelevision && route !is AppRoute.Player) {
+            Modifier.fillMaxSize().padding(start = TV_NAV_RAIL_WIDTH)
+        } else {
+            Modifier.fillMaxSize()
+        }
+
+        platformBackHandler?.invoke(
+            controller.accountDialogVisible ||
+                controller.pendingResume != null ||
+                route != AppRoute.Home,
+        ) {
+            when {
+                controller.accountDialogVisible -> controller.closeAccountDialog()
+                controller.pendingResume != null -> controller.resolveResume(false)
+                route is AppRoute.Player -> {
+                    onFullscreenChange(false)
+                    controller.closePlayer()
+                }
+                route is AppRoute.Details -> controller.closeDetails()
+                else -> controller.showHome()
+            }
+        }
 
         LaunchedEffect(Unit) {
             coroutineScope {
@@ -165,7 +170,8 @@ fun HoshiraApp(
                     onContinueWatching = { progress ->
                         scope.launch { controller.continueWatching(progress) }
                     },
-                    modifier = Modifier.fillMaxSize(),
+                    isTelevision = isTelevision,
+                    modifier = screenModifier,
                 )
 
                 AppRoute.Catalog -> SearchScreen(
@@ -180,16 +186,23 @@ fun HoshiraApp(
                     catalogFilters = controller.catalogFilters,
                     onCatalogFiltersChange = controller::updateCatalogFilters,
                     gridState = catalogGridState,
-                    modifier = Modifier.fillMaxSize(),
+                    isTelevision = isTelevision,
+                    modifier = screenModifier,
                 )
 
                 AppRoute.Search -> SearchScreen(
                     query = controller.searchQuery,
                     state = controller.searchState,
+                    recentSearches = controller.searchHistory,
                     onRetry = { scope.launch { controller.search() } },
-                    onOpenRelease = { id -> scope.launch { controller.showDetails(id) } },
+                    onOpenRelease = { id ->
+                        scope.launch { controller.showSearchResultDetails(id) }
+                    },
                     gridState = searchGridState,
-                    modifier = Modifier.fillMaxSize(),
+                    isTelevision = isTelevision,
+                    isSearchPage = true,
+                    onQueryChange = controller::updateSearchPageQuery,
+                    modifier = screenModifier,
                 )
 
                 AppRoute.Library -> {
@@ -209,12 +222,12 @@ fun HoshiraApp(
                                 scope.launch { controller.logout() }
                             },
                             gridState = libraryGridState,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = screenModifier,
                         )
                     } else {
                         LoadingState(
                             label = "Открываем профиль…",
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = screenModifier,
                         )
                     }
                 }
@@ -225,7 +238,7 @@ fun HoshiraApp(
                     onChange = controller::updatePreferences,
                     onClearHistory = controller::clearHistory,
                     onClearCaches = { controller.clearCaches() },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = screenModifier,
                 )
 
                 is AppRoute.Details -> DetailsScreen(
@@ -246,7 +259,7 @@ fun HoshiraApp(
                     onToggleFavorite = {
                         scope.launch { controller.toggleAnimeFavorite() }
                     },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = screenModifier,
                 )
 
                 is AppRoute.Player -> PlayerScreen(
@@ -256,13 +269,15 @@ fun HoshiraApp(
                     preferences = controller.preferences,
                     preferredQuality = controller.lastQuality,
                     onPlayback = controller::recordPlayback,
+                    onPlaybackFlush = controller::flushPlayback,
                     isFullscreen = isFullscreen,
                     onFullscreenChange = onFullscreenChange,
+                    isTelevision = isTelevision,
                     modifier = Modifier.fillMaxSize(),
                 )
                 }
 
-                if (route !is AppRoute.Player) {
+                if (route !is AppRoute.Player && !isTelevision) {
                     TopNavigation(
                         route = route,
                         query = controller.searchQuery,
@@ -279,6 +294,23 @@ fun HoshiraApp(
                             }
                         },
                         modifier = Modifier.align(Alignment.TopCenter),
+                    )
+                } else if (route !is AppRoute.Player) {
+                    TvSideNavigation(
+                        route = route,
+                        accountProfile = accountProfile,
+                        onHome = controller::showHome,
+                        onCatalog = controller::showCatalog,
+                        onSearch = controller::showSearch,
+                        onSettings = controller::showSettings,
+                        onAccount = {
+                            if (accountProfile != null) {
+                                scope.launch { controller.showLibrary() }
+                            } else {
+                                controller.openAccountDialog()
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.CenterStart).zIndex(10f),
                     )
                 }
 
@@ -355,15 +387,160 @@ fun HoshiraApp(
                 },
             )
         }
+
     }
 }
 
-private fun hoshiraImageCachePath(): okio.Path {
-    return platformCacheDirectory()
-        .resolve("images")
-        .toString()
-        .toPath()
+@Composable
+private fun TvSideNavigation(
+    route: AppRoute,
+    accountProfile: AccountProfile?,
+    onHome: () -> Unit,
+    onCatalog: () -> Unit,
+    onSearch: () -> Unit,
+    onSettings: () -> Unit,
+    onAccount: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(TV_NAV_RAIL_WIDTH)
+            .background(
+                Brush.horizontalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Black,
+                        0.62f to Color.Black.copy(alpha = 0.96f),
+                        1f to Color.Transparent,
+                    ),
+                ),
+            )
+            .padding(start = 10.dp, end = 18.dp, top = 24.dp, bottom = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "H",
+            color = AniColors.OrangeBright,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Black,
+        )
+        Spacer(Modifier.height(42.dp))
+        TvNavigationItem("Поиск", route == AppRoute.Search, onSearch) { color ->
+            SearchGlyph(Modifier.size(22.dp), color)
+        }
+        Spacer(Modifier.height(12.dp))
+        TvNavigationItem("Главная", route == AppRoute.Home, onHome) { color ->
+            TvHomeGlyph(Modifier.size(22.dp), color)
+        }
+        Spacer(Modifier.height(12.dp))
+        TvNavigationItem("Каталог", route == AppRoute.Catalog, onCatalog) { color ->
+            TvCatalogGlyph(Modifier.size(22.dp), color)
+        }
+        Spacer(Modifier.weight(1f))
+        TvNavigationItem("Настройки", route == AppRoute.Settings, onSettings) { color ->
+            SettingsGlyph(Modifier.size(21.dp), color)
+        }
+        Spacer(Modifier.height(14.dp))
+        TvNavigationItem(
+            label = accountProfile?.nickname ?: "Аккаунт",
+            selected = route == AppRoute.Library,
+            onClick = onAccount,
+        ) { color ->
+            if (accountProfile?.avatarUrl != null) {
+                RemoteImage(
+                    url = accountProfile.avatarUrl,
+                    contentDescription = accountProfile.nickname,
+                    modifier = Modifier.size(28.dp).clip(CircleShape),
+                )
+            } else {
+                TvAccountGlyph(Modifier.size(22.dp), color)
+            }
+        }
+    }
 }
+
+@Composable
+private fun TvNavigationItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    icon: @Composable (Color) -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val iconColor = if (selected || focused) AniColors.OrangeBright else AniColors.TextMuted
+    Box(
+        modifier = Modifier
+            .size(46.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        icon(iconColor)
+    }
+}
+
+@Composable
+private fun TvHomeGlyph(modifier: Modifier, color: Color) {
+    Canvas(modifier) {
+        val stroke = 2.2.dp.toPx()
+        val roof = androidx.compose.ui.graphics.Path().apply {
+            moveTo(size.width * 0.14f, size.height * 0.48f)
+            lineTo(size.width * 0.50f, size.height * 0.16f)
+            lineTo(size.width * 0.86f, size.height * 0.48f)
+        }
+        drawPath(roof, color, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = StrokeCap.Round))
+        drawRoundRect(
+            color = color,
+            topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.25f, size.height * 0.43f),
+            size = androidx.compose.ui.geometry.Size(size.width * 0.50f, size.height * 0.40f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
+        )
+    }
+}
+
+@Composable
+private fun TvCatalogGlyph(modifier: Modifier, color: Color) {
+    Canvas(modifier) {
+        val cell = size.minDimension * 0.30f
+        val gap = size.minDimension * 0.16f
+        repeat(2) { row ->
+            repeat(2) { column ->
+                drawRoundRect(
+                    color = color,
+                    topLeft = androidx.compose.ui.geometry.Offset(
+                        size.width * 0.12f + column * (cell + gap),
+                        size.height * 0.12f + row * (cell + gap),
+                    ),
+                    size = androidx.compose.ui.geometry.Size(cell, cell),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvAccountGlyph(modifier: Modifier, color: Color) {
+    Canvas(modifier) {
+        drawCircle(color, radius = size.minDimension * 0.18f, center = center.copy(y = size.height * 0.30f))
+        drawArc(
+            color = color,
+            startAngle = 200f,
+            sweepAngle = 140f,
+            useCenter = false,
+            topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.18f, size.height * 0.44f),
+            size = androidx.compose.ui.geometry.Size(size.width * 0.64f, size.height * 0.48f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(2.2.dp.toPx(), cap = StrokeCap.Round),
+        )
+    }
+}
+
+private val TV_NAV_RAIL_WIDTH = 70.dp
 
 @Composable
 private fun TopNavigation(

@@ -833,7 +833,7 @@ private fun String.urlDecode(): String =
     URLDecoder.decode(this, StandardCharsets.UTF_8)
 
 private fun String.urlEncode(): String =
-    URLEncoder.encode(this, StandardCharsets.UTF_8)
+    URLEncoder.encode(this, StandardCharsets.UTF_8.name())
 
 internal fun String.hlsDebugUrl(): String {
     val uri = toHttpUri() ?: return "<invalid-url>"

@@ -39,6 +39,7 @@ internal sealed interface EmbeddedPlayerAction {
     data object Back : EmbeddedPlayerAction
     data object Previous : EmbeddedPlayerAction
     data object Next : EmbeddedPlayerAction
+    data object FlushPlayback : EmbeddedPlayerAction
     data class SetFullscreen(val fullscreen: Boolean) : EmbeddedPlayerAction
     data class SelectSource(val episodeId: String) : EmbeddedPlayerAction
     data class Playback(

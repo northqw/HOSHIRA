@@ -7,11 +7,14 @@ import app.hoshira.desktop.data.AnimeListKind
 import app.hoshira.desktop.data.AnimeMembership
 import app.hoshira.desktop.data.CatalogFilters
 import app.hoshira.desktop.data.ReleaseRepository
+import app.hoshira.desktop.data.UserDataStore
 import app.hoshira.desktop.model.HomeFeed
 import app.hoshira.desktop.model.ReleaseDto
 import app.hoshira.desktop.model.ReleaseNameDto
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlinx.coroutines.runBlocking
 
@@ -107,6 +110,54 @@ class AppControllerNavigationTest {
             assertIs<UiState.Ready<HomeFeed>>(controller.homeState).value.featured.first(),
         )
     }
+
+    @Test
+    fun `catalog appends pages until repository returns an empty page`() = runBlocking {
+        val second = release.copy(id = 43, alias = "second")
+        val third = release.copy(id = 44, alias = "third")
+        val repository = FakeReleaseRepository(release).apply {
+            catalogPages = mapOf(
+                0 to listOf(release, second),
+                30 to listOf(second, third),
+                60 to emptyList(),
+            )
+        }
+        val controller = AppController(repository, FakeAccountRepository())
+
+        controller.loadCatalog()
+        controller.loadMoreCatalog()
+        controller.loadMoreCatalog()
+
+        assertEquals(listOf(0, 30, 60), repository.catalogOffsets)
+        assertEquals(
+            listOf(release.id, second.id, third.id),
+            assertIs<UiState.Ready<List<ReleaseDto>>>(controller.catalogState).value.map(ReleaseDto::id),
+        )
+        assertFalse(controller.catalogCanLoadMore)
+    }
+
+    @Test
+    fun `opening a search result persists it in recent search cards`() = runBlocking {
+        val file = Files.createTempDirectory("hoshira-controller-search-history")
+            .resolve("user-data.json")
+        val store = UserDataStore(file)
+        val controller = AppController(
+            repository = FakeReleaseRepository(release),
+            accountRepository = FakeAccountRepository(),
+            userDataStore = store,
+        )
+
+        controller.updateSearchPageQuery("тест")
+        controller.search()
+        controller.showSearchResultDetails(release.id)
+        store.awaitPendingWrites()
+
+        assertEquals(listOf(release.id), controller.searchHistory.map(ReleaseDto::id))
+        assertEquals(
+            listOf(release.id),
+            UserDataStore(file).snapshot().searchHistory.map { it.releaseId },
+        )
+    }
 }
 
 private class FakeReleaseRepository(
@@ -114,6 +165,8 @@ private class FakeReleaseRepository(
 ) : ReleaseRepository {
     var homeRelease: ReleaseDto = release
     var homeFailure: Throwable? = null
+    var catalogPages: Map<Int, List<ReleaseDto>> = mapOf(0 to listOf(release))
+    val catalogOffsets = mutableListOf<Int>()
 
     override suspend fun home(): HomeFeed =
         homeFailure?.let { throw it }
@@ -125,7 +178,10 @@ private class FakeReleaseRepository(
         limit: Int,
         offset: Int,
         filters: CatalogFilters,
-    ): List<ReleaseDto> = listOf(release)
+    ): List<ReleaseDto> {
+        catalogOffsets += offset
+        return catalogPages[offset].orEmpty()
+    }
 
     override suspend fun details(id: Int): ReleaseDto = release
 }

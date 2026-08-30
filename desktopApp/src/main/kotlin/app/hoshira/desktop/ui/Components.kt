@@ -13,7 +13,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,6 +57,7 @@ import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -65,9 +69,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.hoshira.desktop.data.AnimeListKind
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import app.hoshira.desktop.data.CatalogFilters
 import app.hoshira.desktop.data.CatalogSort
 import app.hoshira.desktop.model.ReleaseDto
+import app.hoshira.desktop.model.asAbsoluteYaniUrl
+import app.hoshira.desktop.model.imageDeliveryCandidates
 import kotlinx.coroutines.delay
 
 @Composable
@@ -79,7 +89,9 @@ fun PrimaryAction(
     leading: String? = null,
 ) {
     var hovered by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (hovered) 1.035f else 1f)
+    var focused by remember { mutableStateOf(false) }
+    val active = hovered || focused
+    val scale by animateFloatAsState(if (active) 1.035f else 1f)
 
     Row(
         modifier = modifier
@@ -91,7 +103,7 @@ fun PrimaryAction(
             .clip(CircleShape)
             .background(
                 Brush.horizontalGradient(
-                    if (hovered) {
+                    if (active) {
                         listOf(AniColors.OrangeBright, AniColors.Amber)
                     } else {
                         listOf(AniColors.Orange, AniColors.OrangeBright)
@@ -101,6 +113,12 @@ fun PrimaryAction(
             .pointerHoverIcon(PointerIcon.Hand)
             .onPointerEvent(PointerEventType.Enter) { hovered = true }
             .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .onFocusChanged { focused = it.isFocused }
+            .border(
+                width = if (focused) 2.dp else 0.dp,
+                color = if (focused) AniColors.OrangeBright else Color.Transparent,
+                shape = CircleShape,
+            )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -137,10 +155,12 @@ fun SecondaryAction(
     leading: String? = null,
 ) {
     var hovered by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    val active = hovered || focused
     val container by animateColorAsState(
-        if (hovered) AniColors.SurfaceHighest else AniColors.SurfaceHigh.copy(alpha = 0.94f),
+        if (active) AniColors.SurfaceHighest else AniColors.SurfaceHigh.copy(alpha = 0.94f),
     )
-    val scale by animateFloatAsState(if (hovered) 1.025f else 1f)
+    val scale by animateFloatAsState(if (active) 1.025f else 1f)
 
     Row(
         modifier = modifier
@@ -155,6 +175,16 @@ fun SecondaryAction(
             .pointerHoverIcon(PointerIcon.Hand)
             .onPointerEvent(PointerEventType.Enter) { hovered = true }
             .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .onFocusChanged { focused = it.isFocused }
+            .border(
+                width = if (focused) 2.dp else 1.dp,
+                color = if (focused) {
+                    AniColors.OrangeBright
+                } else {
+                    AniColors.Border.copy(alpha = 0.72f)
+                },
+                shape = CircleShape,
+            )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -289,14 +319,16 @@ fun CarouselArrow(
     modifier: Modifier = Modifier,
 ) {
     var hovered by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    val active = (hovered || focused) && enabled
     val container by animateColorAsState(
         when {
             !enabled -> AniColors.Surface.copy(alpha = 0.45f)
-            hovered -> AniColors.Orange
+            active -> AniColors.Orange
             else -> AniColors.SurfaceHigh
         },
     )
-    val scale by animateFloatAsState(if (hovered && enabled) 1.06f else 1f)
+    val scale by animateFloatAsState(if (active) 1.06f else 1f)
 
     Box(
         modifier = modifier
@@ -308,7 +340,11 @@ fun CarouselArrow(
             }
             .clip(CircleShape)
             .background(container)
-            .border(1.dp, if (hovered && enabled) AniColors.OrangeBright else AniColors.Border, CircleShape)
+            .border(
+                if (focused) 2.dp else 1.dp,
+                if (active) AniColors.OrangeBright else AniColors.Border,
+                CircleShape,
+            )
             .pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
             .onPointerEvent(PointerEventType.Enter) { hovered = true }
             .onPointerEvent(PointerEventType.Exit) { hovered = false }
@@ -345,15 +381,18 @@ fun DubbingDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var hovered by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    val active = expanded || hovered || focused
+    val scale by animateFloatAsState(if (focused) 1.025f else 1f)
     val container by animateColorAsState(
         when {
             expanded -> AniColors.SurfaceHighest
-            hovered -> AniColors.SurfaceHighest
+            active -> AniColors.SurfaceHighest
             else -> AniColors.SurfaceHigh
         },
     )
     val border by animateColorAsState(
-        if (expanded || hovered) AniColors.OrangeBright else AniColors.Border,
+        if (active) AniColors.OrangeBright else AniColors.Border,
     )
     val selectedOption = options.firstOrNull { it.first == selected }
 
@@ -364,12 +403,17 @@ fun DubbingDropdown(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .clip(CircleShape)
                 .background(container)
                 .border(1.dp, border, CircleShape)
                 .pointerHoverIcon(PointerIcon.Hand)
                 .onPointerEvent(PointerEventType.Enter) { hovered = true }
                 .onPointerEvent(PointerEventType.Exit) { hovered = false }
+                .onFocusChanged { focused = it.isFocused }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -576,13 +620,10 @@ fun AnimeListDropdown(
 fun CatalogFilterBar(
     filters: CatalogFilters,
     onChange: (CatalogFilters) -> Unit,
+    singleLine: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    FlowRow(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    val content: @Composable () -> Unit = {
         CatalogDropdown(
             caption = "Тип",
             selected = filters.type,
@@ -671,6 +712,26 @@ fun CatalogFilterBar(
             }
         }
     }
+
+    if (singleLine) {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            content()
+        }
+    } else {
+        FlowRow(
+            modifier = modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            content()
+        }
+    }
 }
 
 @Composable
@@ -684,10 +745,12 @@ private fun CatalogDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var hovered by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.025f else 1f)
     val selectedLabel = options.firstOrNull { it.value == selected }?.label
         ?: options.first().label
     val border by animateColorAsState(
-        if (expanded || hovered) AniColors.OrangeBright else AniColors.Border,
+        if (expanded || hovered || focused) AniColors.OrangeBright else AniColors.Border,
     )
 
     Box(Modifier.width(width.dp)) {
@@ -695,12 +758,17 @@ private fun CatalogDropdown(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(46.dp)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .clip(CircleShape)
                 .border(1.dp, border, CircleShape)
                 .background(if (expanded) AniColors.SurfaceHighest else AniColors.SurfaceHigh)
                 .pointerHoverIcon(PointerIcon.Hand)
                 .onPointerEvent(PointerEventType.Enter) { hovered = true }
                 .onPointerEvent(PointerEventType.Exit) { hovered = false }
+                .onFocusChanged { focused = it.isFocused }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -897,9 +965,11 @@ fun PosterCard(
     modifier: Modifier = Modifier,
 ) {
     var hovered by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (hovered) 1.045f else 1f)
+    var focused by remember { mutableStateOf(false) }
+    val active = hovered || focused
+    val scale by animateFloatAsState(if (active) 1.045f else 1f)
     val borderColor by animateColorAsState(
-        if (hovered) AniColors.Orange.copy(alpha = 0.85f) else AniColors.Border,
+        if (active) AniColors.Orange.copy(alpha = 0.92f) else AniColors.Border,
     )
 
     Column(
@@ -911,6 +981,7 @@ fun PosterCard(
             .pointerHoverIcon(PointerIcon.Hand)
             .onPointerEvent(PointerEventType.Enter) { hovered = true }
             .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .onFocusChanged { focused = it.isFocused }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -926,7 +997,7 @@ fun PosterCard(
                 .border(1.dp, borderColor, RoundedCornerShape(12.dp)),
         ) {
             RemoteImage(
-                url = release.posterUrl,
+                url = release.posterStandardUrl,
                 contentDescription = release.displayName,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -962,7 +1033,7 @@ fun PosterCard(
                 }
             }
 
-            if (hovered) {
+            if (active) {
                 Box(
                     Modifier
                         .align(Alignment.Center)
@@ -1010,26 +1081,54 @@ fun RemoteImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
     filterQuality: FilterQuality = FilterQuality.High,
+    placeholderUrl: String? = null,
 ) {
-    var retryAttempt by remember(url) { mutableStateOf(0) }
-    var failedAttempt by remember(url) { mutableStateOf(-1) }
-    var loadedAttempt by remember(url) { mutableStateOf(-1) }
+    val candidateUrls = remember(url) {
+        imageDeliveryCandidates(url.normalizedRemoteImageUrl())
+    }
+    var candidateIndex by remember(candidateUrls) { mutableIntStateOf(0) }
+    val normalizedUrl = candidateUrls.getOrNull(candidateIndex)
+    val normalizedPlaceholderUrl = remember(placeholderUrl) {
+        placeholderUrl.normalizedRemoteImageUrl()
+    }
+    var retryAttempt by remember(normalizedUrl) { mutableStateOf(0) }
+    var failedAttempt by remember(normalizedUrl) { mutableStateOf(-1) }
+    var loadedAttempt by remember(normalizedUrl) { mutableStateOf(-1) }
     val currentAttempt = retryAttempt
+    val request = rememberRemoteImageRequest(
+        url = normalizedUrl,
+        placeholderUrl = normalizedPlaceholderUrl,
+    )
 
-    LaunchedEffect(url, currentAttempt, failedAttempt, loadedAttempt) {
+    LaunchedEffect(normalizedUrl, currentAttempt, failedAttempt, loadedAttempt) {
         if (
-            url == null ||
-            loadedAttempt == currentAttempt ||
+            normalizedUrl == null ||
+            loadedAttempt == currentAttempt
+        ) return@LaunchedEffect
+
+        if (candidateIndex < candidateUrls.lastIndex && failedAttempt != currentAttempt) {
+            delay(IMAGE_PRIMARY_FALLBACK_TIMEOUT_MS)
+            if (
+                candidateIndex < candidateUrls.lastIndex &&
+                loadedAttempt != currentAttempt &&
+                failedAttempt != currentAttempt
+            ) {
+                candidateIndex += 1
+            }
+            return@LaunchedEffect
+        }
+
+        if (
+            failedAttempt != currentAttempt ||
             currentAttempt >= IMAGE_RETRY_DELAYS_MS.size
         ) return@LaunchedEffect
 
-        val retryDelay = if (failedAttempt == currentAttempt) {
-            IMAGE_RETRY_DELAYS_MS[currentAttempt]
-        } else {
-            IMAGE_LOAD_TIMEOUT_MS
-        }
-        delay(retryDelay)
-        if (loadedAttempt != currentAttempt && retryAttempt == currentAttempt) {
+        delay(IMAGE_RETRY_DELAYS_MS[currentAttempt])
+        if (
+            loadedAttempt != currentAttempt &&
+            failedAttempt == currentAttempt &&
+            retryAttempt == currentAttempt
+        ) {
             retryAttempt = currentAttempt + 1
         }
     }
@@ -1042,19 +1141,22 @@ fun RemoteImage(
         ),
         contentAlignment = Alignment.Center,
     ) {
-        if (url != null) {
-            key(url, currentAttempt) {
+        if (request != null) {
+            key(normalizedUrl, currentAttempt) {
                 AsyncImage(
-                    model = url,
+                    model = request,
                     contentDescription = contentDescription,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = contentScale,
                     filterQuality = filterQuality,
                     onSuccess = {
                         loadedAttempt = currentAttempt
+                        failedAttempt = -1
                     },
                     onError = {
-                        if (currentAttempt < IMAGE_RETRY_DELAYS_MS.size) {
+                        if (candidateIndex < candidateUrls.lastIndex) {
+                            candidateIndex += 1
+                        } else if (currentAttempt < IMAGE_RETRY_DELAYS_MS.size) {
                             failedAttempt = currentAttempt
                         }
                     },
@@ -1071,8 +1173,40 @@ fun RemoteImage(
     }
 }
 
+@Composable
+private fun rememberRemoteImageRequest(
+    url: String?,
+    placeholderUrl: String?,
+): ImageRequest? {
+    val context = LocalPlatformContext.current
+    return remember(context, url, placeholderUrl) {
+        url?.let { normalizedUrl ->
+            ImageRequest.Builder(context)
+                .data(normalizedUrl)
+                .crossfade(true)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .networkCachePolicy(CachePolicy.ENABLED)
+                .memoryCacheKey(normalizedUrl)
+                .apply {
+                    placeholderUrl
+                        ?.takeUnless { it == normalizedUrl }
+                        ?.let(::placeholderMemoryCacheKey)
+                }
+                .build()
+        }
+    }
+
+}
+
+private fun String?.normalizedRemoteImageUrl(): String? =
+    this
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.asAbsoluteYaniUrl()
+
 private val IMAGE_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_500L, 5_000L)
-private const val IMAGE_LOAD_TIMEOUT_MS = 8_000L
+private const val IMAGE_PRIMARY_FALLBACK_TIMEOUT_MS = 8_000L
 
 @Composable
 fun LoadingState(

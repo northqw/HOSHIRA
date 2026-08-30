@@ -13,6 +13,7 @@ internal fun platformCacheDirectory(): Path = cacheDirectory()
 internal fun isPortableMode(): Boolean = false
 
 internal fun clearHoshiraCaches(): Boolean = runCatching {
+    PlaybackMediaCache.release()
     val cache = platformCacheDirectory().toAbsolutePath().normalize()
     if (!Files.exists(cache)) return@runCatching true
     Files.walk(cache).use { paths ->

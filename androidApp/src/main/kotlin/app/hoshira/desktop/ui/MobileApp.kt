@@ -25,10 +25,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +57,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,6 +90,7 @@ import app.hoshira.desktop.model.EpisodeDto
 import app.hoshira.desktop.model.HomeFeed
 import app.hoshira.desktop.model.ReleaseDto
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 private enum class MobileTab(val label: String, val glyph: String? = null) {
@@ -104,6 +111,24 @@ fun HoshiraMobileApp(
         val controller = remember(repository) { AppController(repository) }
         val scope = rememberCoroutineScope()
         var selectedTab by remember { mutableStateOf(MobileTab.Home) }
+        val homeListState = rememberLazyListState()
+        val catalogGridState = rememberLazyGridState()
+        val searchResultsGridState = rememberLazyGridState()
+        val searchHistoryGridState = rememberLazyGridState()
+        val profileGridState = rememberLazyGridState()
+        val detailsListState = rememberLazyListState()
+        val openRelease: (Int) -> Unit = { releaseId ->
+            scope.launch {
+                detailsListState.scrollToItem(0)
+                controller.showDetails(releaseId)
+            }
+        }
+        val openSearchRelease: (Int) -> Unit = { releaseId ->
+            scope.launch {
+                detailsListState.scrollToItem(0)
+                controller.showSearchResultDetails(releaseId)
+            }
+        }
 
         LaunchedEffect(Unit) {
             controller.loadHome()
@@ -155,12 +180,14 @@ fun HoshiraMobileApp(
                         preferences = controller.preferences,
                         preferredQuality = controller.lastQuality,
                         onPlayback = controller::recordPlayback,
+                        onPlaybackFlush = controller::flushPlayback,
                         isFullscreen = isFullscreen,
                         onFullscreenChange = onFullscreenChange,
                         modifier = Modifier.fillMaxSize(),
                     )
                     is AppRoute.Details -> MobileDetailsScreen(
                         state = controller.detailsState,
+                        listState = detailsListState,
                         membershipState = controller.animeMembershipState,
                         accountSignedIn = controller.accountState is AccountState.SignedIn,
                         accountActionInProgress = controller.accountActionInProgress,
@@ -185,44 +212,49 @@ fun HoshiraMobileApp(
                         when (selectedTab) {
                             MobileTab.Home -> MobileHomeScreen(
                                 state = controller.homeState,
+                                listState = homeListState,
                                 continueWatching = controller.continueWatching,
                                 onRetry = {
                                     scope.launch { controller.loadHome(force = true) }
                                 },
-                                onOpenRelease = { id ->
-                                    scope.launch { controller.showDetails(id) }
-                                },
+                                onOpenRelease = openRelease,
                                 onContinue = { progress ->
                                     scope.launch { controller.continueWatching(progress) }
                                 },
                             )
                             MobileTab.Catalog -> MobileCatalogScreen(
                                 state = controller.catalogState,
+                                gridState = catalogGridState,
                                 filters = controller.catalogFilters,
                                 onFiltersChange = { filters ->
-                                    controller.updateCatalogFilters(filters)
-                                    scope.launch { controller.loadCatalog(force = true) }
+                                    scope.launch {
+                                        catalogGridState.scrollToItem(0)
+                                        controller.updateCatalogFilters(filters)
+                                        controller.loadCatalog(force = true)
+                                    }
                                 },
                                 onRetry = {
                                     scope.launch { controller.loadCatalog(force = true) }
                                 },
-                                onOpenRelease = { id ->
-                                    scope.launch { controller.showDetails(id) }
-                                },
+                                onLoadMore = { scope.launch { controller.loadMoreCatalog() } },
+                                isLoadingMore = controller.catalogLoadingMore,
+                                canLoadMore = controller.catalogCanLoadMore,
+                                loadMoreError = controller.catalogLoadMoreError,
+                                onOpenRelease = openRelease,
                             )
                             MobileTab.Profile -> MobileProfileScreen(
                                 controller = controller,
-                                onOpenRelease = { id ->
-                                    scope.launch { controller.showDetails(id) }
-                                },
+                                gridState = profileGridState,
+                                onOpenRelease = openRelease,
                             )
                             MobileTab.Search -> MobileSearchScreen(
                                 query = controller.searchQuery,
                                 onQueryChange = controller::updateSearchQuery,
                                 state = controller.searchState,
-                                onOpenRelease = { id ->
-                                    scope.launch { controller.showDetails(id) }
-                                },
+                                history = controller.searchHistory,
+                                resultsGridState = searchResultsGridState,
+                                historyGridState = searchHistoryGridState,
+                                onOpenRelease = openSearchRelease,
                             )
                         }
                         MobileBottomBar(
@@ -280,6 +312,7 @@ fun HoshiraMobileApp(
 @Composable
 private fun MobileHomeScreen(
     state: UiState<HomeFeed>,
+    listState: LazyListState,
     continueWatching: List<WatchProgress>,
     onRetry: () -> Unit,
     onOpenRelease: (Int) -> Unit,
@@ -293,6 +326,7 @@ private fun MobileHomeScreen(
             val hero = feed.featured.firstOrNull()
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize().background(Color.Black),
                     contentPadding = PaddingValues(bottom = MOBILE_BOTTOM_BAR_HEIGHT + 22.dp),
                 ) {
@@ -378,7 +412,8 @@ private fun MobileHero(release: ReleaseDto, onOpenRelease: (Int) -> Unit) {
             .clickable { onOpenRelease(release.id) },
     ) {
         RemoteImage(
-            url = release.backdropUrl ?: release.posterUrl,
+            url = release.backdropHighUrl,
+            placeholderUrl = release.backdropStandardUrl,
             contentDescription = release.displayName,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
@@ -477,9 +512,14 @@ private fun MobileProgressCard(progress: WatchProgress, onContinue: (WatchProgre
 @Composable
 private fun MobileCatalogScreen(
     state: UiState<List<ReleaseDto>>,
+    gridState: LazyGridState,
     filters: CatalogFilters,
     onFiltersChange: (CatalogFilters) -> Unit,
     onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
+    isLoadingMore: Boolean,
+    canLoadMore: Boolean,
+    loadMoreError: String?,
     onOpenRelease: (Int) -> Unit,
 ) {
     Column(
@@ -507,7 +547,29 @@ private fun MobileCatalogScreen(
                     Text("По этим фильтрам ничего не найдено", color = AniColors.TextMuted)
                 }
             } else {
+                val releases = state.value
+                LaunchedEffect(
+                    gridState,
+                    releases.size,
+                    canLoadMore,
+                    isLoadingMore,
+                    loadMoreError,
+                ) {
+                    if (!canLoadMore || isLoadingMore || loadMoreError != null) {
+                        return@LaunchedEffect
+                    }
+                    snapshotFlow {
+                        gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                    }
+                        .distinctUntilChanged()
+                        .collect { lastVisibleIndex ->
+                            if (lastVisibleIndex >= releases.lastIndex - 4 && lastVisibleIndex >= 0) {
+                                onLoadMore()
+                            }
+                        }
+                }
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Fixed(2),
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     contentPadding = PaddingValues(
@@ -518,12 +580,43 @@ private fun MobileCatalogScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp),
                 ) {
-                    items(state.value, key = ReleaseDto::id) { release ->
+                    items(releases, key = ReleaseDto::id) { release ->
                         MobilePosterCard(
                             release = release,
                             onClick = { onOpenRelease(release.id) },
                             modifier = Modifier.fillMaxWidth(),
                         )
+                    }
+                    if (isLoadingMore) {
+                        item(
+                            key = "mobile-catalog-loading-more",
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().height(88.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(
+                                    color = AniColors.OrangeBright,
+                                    strokeWidth = 3.dp,
+                                )
+                            }
+                        }
+                    } else if (loadMoreError != null) {
+                        item(
+                            key = "mobile-catalog-load-more-error",
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(loadMoreError, color = AniColors.TextMuted)
+                                TextButton(onClick = onLoadMore) {
+                                    Text("Повторить", color = AniColors.OrangeBright)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -705,6 +798,9 @@ private fun MobileSearchScreen(
     query: String,
     onQueryChange: (String) -> Unit,
     state: UiState<List<ReleaseDto>>,
+    history: List<ReleaseDto>,
+    resultsGridState: LazyGridState,
+    historyGridState: LazyGridState,
     onOpenRelease: (Int) -> Unit,
 ) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -721,33 +817,55 @@ private fun MobileSearchScreen(
         )
         Spacer(Modifier.height(16.dp))
         when {
-            query.isBlank() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            query.isBlank() && history.isEmpty() -> Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text("Введите название релиза", color = AniColors.TextMuted)
             }
+            query.isBlank() -> MobileSearchGrid(
+                releases = history,
+                gridState = historyGridState,
+                onOpenRelease = onOpenRelease,
+            )
             state == UiState.Loading -> MobileLoading()
             state is UiState.Error -> ErrorState(
                 state.message,
                 onRetry = {},
                 modifier = Modifier.fillMaxSize(),
             )
-            state is UiState.Ready -> LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = 18.dp,
-                    end = 18.dp,
-                    bottom = MOBILE_BOTTOM_BAR_HEIGHT + 20.dp,
-                ),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-            ) {
-                items(state.value, key = ReleaseDto::id) { release ->
-                    MobilePosterCard(
-                        release = release,
-                        onClick = { onOpenRelease(release.id) },
-                    )
-                }
-            }
+            state is UiState.Ready -> MobileSearchGrid(
+                releases = state.value,
+                gridState = resultsGridState,
+                onOpenRelease = onOpenRelease,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileSearchGrid(
+    releases: List<ReleaseDto>,
+    gridState: LazyGridState,
+    onOpenRelease: (Int) -> Unit,
+) {
+    LazyVerticalGrid(
+        state = gridState,
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = 18.dp,
+            end = 18.dp,
+            bottom = MOBILE_BOTTOM_BAR_HEIGHT + 20.dp,
+        ),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        items(releases, key = ReleaseDto::id) { release ->
+            MobilePosterCard(
+                release = release,
+                onClick = { onOpenRelease(release.id) },
+            )
         }
     }
 }
@@ -755,6 +873,7 @@ private fun MobileSearchScreen(
 @Composable
 private fun MobileProfileScreen(
     controller: AppController,
+    gridState: LazyGridState,
     onOpenRelease: (Int) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -778,6 +897,7 @@ private fun MobileProfileScreen(
             avatarUrl = account.profile.avatarUrl,
             selectedKind = controller.selectedLibraryKind,
             libraryState = controller.libraryState,
+            gridState = gridState,
             onSelectKind = controller::selectLibraryKind,
             onOpenRelease = onOpenRelease,
             onLogout = { scope.launch { controller.logout() } },
@@ -842,6 +962,7 @@ private fun MobileSignedInProfile(
     avatarUrl: String?,
     selectedKind: AnimeListKind,
     libraryState: UiState<AccountLibrary>,
+    gridState: LazyGridState,
     onSelectKind: (AnimeListKind) -> Unit,
     onOpenRelease: (Int) -> Unit,
     onLogout: () -> Unit,
@@ -897,6 +1018,7 @@ private fun MobileSignedInProfile(
                     }
                 } else {
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(2),
                         contentPadding = PaddingValues(
                             start = 18.dp,
@@ -922,6 +1044,7 @@ private fun MobileSignedInProfile(
 @Composable
 private fun MobileDetailsScreen(
     state: UiState<ReleaseDto>,
+    listState: LazyListState,
     membershipState: UiState<AnimeMembership>,
     accountSignedIn: Boolean,
     accountActionInProgress: Boolean,
@@ -983,13 +1106,16 @@ private fun MobileDetailsScreen(
                 ?.value
                 .orEmpty()
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize().background(Color.Black),
                 contentPadding = PaddingValues(bottom = 30.dp),
             ) {
                 item {
                     Box(Modifier.fillMaxWidth().height(390.dp)) {
                         RemoteImage(
-                            url = release.backdropUrl ?: release.posterUrl,
+                            url = release.backdropFullUrl,
+                            placeholderUrl = release.backdropHighUrl
+                                ?: release.posterStandardUrl,
                             contentDescription = release.displayName,
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -1152,7 +1278,7 @@ private fun MobileDetailsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RemoteImage(
-                            url = episode.previewUrl ?: release.backdropUrl,
+                            url = episode.previewUrl ?: release.backdropStandardUrl,
                             contentDescription = episode.title,
                             modifier = Modifier
                                 .width(128.dp)
@@ -1449,7 +1575,7 @@ private fun MobilePosterCard(
 ) {
     Column(modifier.clickable(onClick = onClick)) {
         RemoteImage(
-            url = release.posterUrl,
+            url = release.posterThumbnailUrl,
             contentDescription = release.displayName,
             modifier = Modifier
                 .fillMaxWidth()

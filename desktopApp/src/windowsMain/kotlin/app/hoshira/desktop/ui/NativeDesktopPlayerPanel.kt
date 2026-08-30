@@ -156,6 +156,7 @@ internal class NativeDesktopPlayerPanel(
     private var snapshotWriteIndex = 0
     private var firstFrameLogged = false
     private var seeking = false
+    private var controlsVisible = true
     private var lastPlaybackNotificationNanos = 0L
     private var lastPlaybackUiUpdateNanos = 0L
 
@@ -305,7 +306,7 @@ internal class NativeDesktopPlayerPanel(
             exitNativeFullscreen()
         }
         Platform.runLater {
-            emitPlayback(oldActionCallback)
+            emitPlayback(oldActionCallback, flush = true)
             controlsTimer?.stop()
             controlsTimer = null
             frameCaptureTimer?.stop()
@@ -1427,7 +1428,12 @@ internal class NativeDesktopPlayerPanel(
     private fun updatePlaybackPosition() {
         val player = mediaPlayer ?: return
         val now = System.nanoTime()
-        if (now - lastPlaybackUiUpdateNanos < PLAYBACK_UI_UPDATE_NANOS) return
+        val uiUpdateInterval = if (controlsVisible) {
+            PLAYBACK_UI_UPDATE_NANOS
+        } else {
+            HIDDEN_PLAYBACK_UI_UPDATE_NANOS
+        }
+        if (now - lastPlaybackUiUpdateNanos < uiUpdateInterval) return
         lastPlaybackUiUpdateNanos = now
         val position = player.currentTime.safeSeconds()
         val duration = player.totalDuration.safeSeconds()
@@ -1442,7 +1448,12 @@ internal class NativeDesktopPlayerPanel(
             }
             awtElapsedLabel.text = "${position.clockText()} / ${duration.clockText()}"
         }
-        if (now - lastPlaybackNotificationNanos >= PLAYBACK_NOTIFICATION_NANOS) {
+        val notificationInterval = if (controlsVisible) {
+            PLAYBACK_NOTIFICATION_NANOS
+        } else {
+            HIDDEN_PLAYBACK_NOTIFICATION_NANOS
+        }
+        if (now - lastPlaybackNotificationNanos >= notificationInterval) {
             lastPlaybackNotificationNanos = now
             emitPlayback()
         }
@@ -1454,7 +1465,7 @@ internal class NativeDesktopPlayerPanel(
         if (duration <= 0.0) return
         val fraction = (seekSlider?.value ?: 0.0) / SEEK_RANGE
         player.seek(Duration.seconds(duration * fraction))
-        emitPlayback()
+        emitPlayback(flush = true)
     }
 
     private fun seekBy(deltaSeconds: Double) {
@@ -1464,6 +1475,7 @@ internal class NativeDesktopPlayerPanel(
             .coerceIn(0.0, duration.takeIf { it > 0.0 } ?: Double.MAX_VALUE)
         player.seek(Duration.seconds(target))
         showControls()
+        emitPlayback(flush = true)
     }
 
     private fun changeVolume(delta: Double) {
@@ -1475,7 +1487,10 @@ internal class NativeDesktopPlayerPanel(
     private fun togglePlayback() {
         val player = mediaPlayer ?: return
         when (player.status) {
-            MediaPlayer.Status.PLAYING -> player.pause()
+            MediaPlayer.Status.PLAYING -> {
+                player.pause()
+                emitPlayback(flush = true)
+            }
             MediaPlayer.Status.READY,
             MediaPlayer.Status.PAUSED,
             MediaPlayer.Status.STOPPED,
@@ -1507,6 +1522,7 @@ internal class NativeDesktopPlayerPanel(
     }
 
     private fun showControls(permanent: Boolean = false) {
+        controlsVisible = true
         topBar?.apply {
             opacity = 1.0
             isMouseTransparent = false
@@ -1528,6 +1544,7 @@ internal class NativeDesktopPlayerPanel(
             Duration.millis(requestedChrome.controlsHideDelayMs.coerceAtLeast(1_200).toDouble()),
         ).apply {
             setOnFinished {
+                controlsVisible = false
                 topBar?.apply {
                     opacity = 0.0
                     isMouseTransparent = true
@@ -1578,7 +1595,10 @@ internal class NativeDesktopPlayerPanel(
         }
     }
 
-    private fun emitPlayback(callback: (EmbeddedPlayerAction) -> Unit = actionCallback) {
+    private fun emitPlayback(
+        callback: (EmbeddedPlayerAction) -> Unit = actionCallback,
+        flush: Boolean = false,
+    ) {
         val player = mediaPlayer ?: return
         val position = player.currentTime.safeSeconds()
         val duration = player.totalDuration.safeSeconds()
@@ -1591,6 +1611,7 @@ internal class NativeDesktopPlayerPanel(
                     quality = activeQuality,
                 ),
             )
+            if (flush) callback(EmbeddedPlayerAction.FlushPlayback)
         }
     }
 
@@ -2391,7 +2412,9 @@ private const val MIN_CAPTURE_WIDTH = 640
 private const val MIN_CAPTURE_HEIGHT = 360
 private const val FRAME_CAPTURE_INTERVAL_MS = 1_000.0 / 24.0
 private const val PLAYBACK_UI_UPDATE_NANOS = 100_000_000L
+private const val HIDDEN_PLAYBACK_UI_UPDATE_NANOS = 1_000_000_000L
 private const val PLAYBACK_NOTIFICATION_NANOS = 750_000_000L
+private const val HIDDEN_PLAYBACK_NOTIFICATION_NANOS = 5_000_000_000L
 private const val POPUP_HORIZONTAL_PADDING = 28
 private const val MAX_SOURCE_POPUP_WIDTH = 420
 private const val LOADER_DIAMETER = 38

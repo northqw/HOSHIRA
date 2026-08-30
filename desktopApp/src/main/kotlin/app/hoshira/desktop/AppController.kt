@@ -1,5 +1,6 @@
 package app.hoshira.desktop
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -33,6 +34,7 @@ sealed interface AppRoute {
     data class Player(val releaseId: Int, val episodeId: String) : AppRoute
 }
 
+@Immutable
 data class PlaybackSession(
     val release: ReleaseDto,
     val episode: EpisodeDto,
@@ -96,17 +98,25 @@ class AppController(
     var searchQuery: String by mutableStateOf("")
         private set
 
+    var searchHistory: List<ReleaseDto> by mutableStateOf(
+        userDataStore.snapshot().searchHistory.map { it.toRelease() },
+    )
+        private set
+
     var playbackSession: PlaybackSession? by mutableStateOf(null)
         private set
 
     var preferences: PlayerPreferences by mutableStateOf(userDataStore.snapshot().preferences)
         private set
+    private var pendingPlaybackPreferences: PlayerPreferences = preferences
 
     var watchHistory: List<WatchProgress> by mutableStateOf(userDataStore.snapshot().history)
         private set
+    private var pendingWatchHistory: List<WatchProgress> = watchHistory
 
     var lastQuality: String? by mutableStateOf(userDataStore.snapshot().lastQuality)
         private set
+    private var pendingLastQuality: String? = lastQuality
 
     var pendingResume: PendingResume? by mutableStateOf(null)
         private set
@@ -164,14 +174,17 @@ class AppController(
 
     suspend fun loadHome(force: Boolean = false) {
         if (!force && homeState is UiState.Ready) return
-        updateHome(showLoading = true)
+        updateHome(showLoading = true, forceRefresh = force)
     }
 
     suspend fun refreshHome() {
-        updateHome(showLoading = false)
+        updateHome(showLoading = false, forceRefresh = true)
     }
 
-    private suspend fun updateHome(showLoading: Boolean) {
+    private suspend fun updateHome(
+        showLoading: Boolean,
+        forceRefresh: Boolean,
+    ) {
         if (homeLoading) return
         homeLoading = true
         val previousState = homeState
@@ -180,7 +193,9 @@ class AppController(
         }
 
         try {
-            homeState = UiState.Ready(repository.home())
+            homeState = UiState.Ready(
+                if (forceRefresh) repository.refreshHome() else repository.home(),
+            )
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
             if (showLoading || previousState !is UiState.Ready) {
@@ -264,6 +279,15 @@ class AppController(
         playbackSession = null
     }
 
+    fun showSearch() {
+        if (route != AppRoute.Search) {
+            routeBeforeSearch = route
+        }
+        route = AppRoute.Search
+        searchQuery = ""
+        playbackSession = null
+    }
+
     fun showSettings() {
         route = AppRoute.Settings
         searchQuery = ""
@@ -294,6 +318,11 @@ class AppController(
         route = if (value.isBlank()) routeBeforeSearch else AppRoute.Search
     }
 
+    fun updateSearchPageQuery(value: String) {
+        searchQuery = value
+        route = AppRoute.Search
+    }
+
     fun updateCatalogFilters(value: CatalogFilters) {
         if (catalogFilters == value) return
         catalogFilters = value
@@ -315,6 +344,19 @@ class AppController(
         )
     }
 
+    suspend fun showSearchResultDetails(releaseId: Int) {
+        val release = (searchState as? UiState.Ready)
+            ?.value
+            ?.firstOrNull { it.id == releaseId }
+            ?: searchHistory.firstOrNull { it.id == releaseId }
+        if (release != null) {
+            searchHistory = userDataStore.recordSearchVisit(release)
+                .searchHistory
+                .map { it.toRelease() }
+        }
+        showDetails(releaseId)
+    }
+
     suspend fun loadCatalog(force: Boolean = false) {
         if (!force && (catalogState as? UiState.Ready)?.value?.isNotEmpty() == true) return
 
@@ -333,8 +375,8 @@ class AppController(
         if (requestedFilters != catalogFilters) return
         catalogState = result.fold(
             onSuccess = { page ->
-                catalogOffset = page.size
-                catalogCanLoadMore = page.size == CATALOG_PAGE_SIZE
+                catalogOffset = CATALOG_PAGE_SIZE
+                catalogCanLoadMore = page.isNotEmpty()
                 UiState.Ready(page.distinctBy(ReleaseDto::id))
             },
             onFailure = { UiState.Error(it.userFacingMessage()) },
@@ -357,8 +399,8 @@ class AppController(
         }.fold(
             onSuccess = { page ->
                 if (requestedFilters != catalogFilters) return@fold
-                catalogOffset += page.size
-                catalogCanLoadMore = page.size == CATALOG_PAGE_SIZE
+                catalogOffset += CATALOG_PAGE_SIZE
+                catalogCanLoadMore = page.isNotEmpty()
                 catalogState = UiState.Ready(
                     (current + page).distinctBy(ReleaseDto::id),
                 )
@@ -460,6 +502,7 @@ class AppController(
             return
         }
 
+        flushPlayback()
         val progress = watchHistory.firstOrNull {
             it.releaseId == release.id && it.episodeId == episode.id
         }
@@ -497,7 +540,9 @@ class AppController(
     }
 
     fun updatePreferences(value: PlayerPreferences) {
-        preferences = userDataStore.updatePreferences(value).preferences
+        val updated = userDataStore.updatePreferences(value).preferences
+        pendingPlaybackPreferences = updated
+        preferences = updated
     }
 
     fun recordPlayback(
@@ -519,27 +564,47 @@ class AppController(
             positionSeconds = positionSeconds.coerceAtLeast(0.0),
             durationSeconds = durationSeconds.coerceAtLeast(0.0),
             updatedAtEpochMillis = System.currentTimeMillis(),
-            imageUrl = session.episode.previewUrl ?: session.release.backdropUrl,
+            imageUrl = session.episode.previewUrl ?: session.release.backdropStandardUrl,
             watched = isWatched(positionSeconds, durationSeconds),
         )
-        watchHistory = userDataStore.updateProgress(progress).history
-
         val normalizedVolume = volume.coerceIn(0f, 1f)
-        if (kotlin.math.abs(preferences.startupVolume - normalizedVolume) >= 0.01f) {
-            updatePreferences(preferences.copy(startupVolume = normalizedVolume))
+        val updatedPreferences = if (
+            kotlin.math.abs(pendingPlaybackPreferences.startupVolume - normalizedVolume) >= 0.01f
+        ) {
+            pendingPlaybackPreferences.copy(startupVolume = normalizedVolume)
+        } else {
+            pendingPlaybackPreferences
         }
-        if (!quality.isNullOrBlank() && quality != lastQuality) {
-            lastQuality = userDataStore.updateQuality(quality).lastQuality
-        }
+        val snapshot = userDataStore.updatePlayback(
+            progress = progress,
+            preferences = updatedPreferences,
+            quality = quality,
+        )
+        pendingWatchHistory = snapshot.history
+        pendingPlaybackPreferences = snapshot.preferences
+        pendingLastQuality = snapshot.lastQuality
+    }
+
+    fun flushPlayback() {
+        if (watchHistory != pendingWatchHistory) watchHistory = pendingWatchHistory
+        if (preferences != pendingPlaybackPreferences) preferences = pendingPlaybackPreferences
+        if (lastQuality != pendingLastQuality) lastQuality = pendingLastQuality
+        userDataStore.requestFlush()
     }
 
     fun clearHistory() {
-        watchHistory = userDataStore.clearHistory().history
+        val history = userDataStore.clearHistory().history
+        pendingWatchHistory = history
+        watchHistory = history
     }
 
-    fun clearCaches(): Boolean = clearHoshiraCaches()
+    fun clearCaches(): Boolean {
+        repository.clearMemoryCaches()
+        return clearHoshiraCaches()
+    }
 
     fun closePlayer() {
+        flushPlayback()
         val releaseId = playbackSession?.release?.id ?: return showHome()
         route = AppRoute.Details(releaseId)
     }
@@ -618,6 +683,7 @@ class AppController(
         episode: EpisodeDto,
         resumeSeconds: Double,
     ) {
+        if (playbackSession != null) flushPlayback()
         playbackSession = PlaybackSession(release, episode, resumeSeconds)
         route = AppRoute.Player(release.id, episode.id)
     }

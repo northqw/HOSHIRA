@@ -44,6 +44,7 @@ dependencies {
 
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     if (targetOs == "windows") {
         implementation("net.java.dev.jna:jna:5.6.0")

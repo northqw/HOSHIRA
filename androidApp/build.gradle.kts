@@ -51,8 +51,8 @@ android {
         applicationId = "app.hoshira"
         minSdk = 26
         targetSdk = 36
-        versionCode = 400
-        versionName = "0.4.0"
+        versionCode = 406
+        versionName = "0.4.1"
     }
 
     buildFeatures {
@@ -123,9 +123,12 @@ dependencies {
     val media3Version = "1.10.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    implementation("androidx.media3:media3-session:$media3Version")
 
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")

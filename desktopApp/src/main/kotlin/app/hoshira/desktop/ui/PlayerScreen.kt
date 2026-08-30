@@ -44,8 +44,10 @@ fun PlayerScreen(
     preferences: PlayerPreferences,
     preferredQuality: String?,
     onPlayback: (Double, Double, Float, String?) -> Unit,
+    onPlaybackFlush: () -> Unit,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
+    isTelevision: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val playerPageUrl = session?.episode?.externalPlayerUrl
@@ -141,6 +143,7 @@ fun PlayerScreen(
     val onPlayerAction: (EmbeddedPlayerAction) -> Unit = { action ->
         when (action) {
             EmbeddedPlayerAction.Back -> {
+                onPlaybackFlush()
                 if (currentFullscreen) {
                     // Restore the top-level window before leaving the route so
                     // AWT does not resize and dispose the media panel at once.
@@ -150,13 +153,23 @@ fun PlayerScreen(
                     onBack()
                 }
             }
-            EmbeddedPlayerAction.Previous -> previousEpisode?.let(onPlayEpisode)
-            EmbeddedPlayerAction.Next -> nextEpisode?.let(onPlayEpisode)
+            EmbeddedPlayerAction.Previous -> {
+                onPlaybackFlush()
+                previousEpisode?.let(onPlayEpisode)
+            }
+            EmbeddedPlayerAction.Next -> {
+                onPlaybackFlush()
+                nextEpisode?.let(onPlayEpisode)
+            }
+            EmbeddedPlayerAction.FlushPlayback -> onPlaybackFlush()
             is EmbeddedPlayerAction.SetFullscreen ->
                 currentFullscreenCallback(action.fullscreen)
-            is EmbeddedPlayerAction.SelectSource -> sourceCandidates
-                .firstOrNull { it.id == action.episodeId }
-                ?.let(onPlayEpisode)
+            is EmbeddedPlayerAction.SelectSource -> {
+                onPlaybackFlush()
+                sourceCandidates
+                    .firstOrNull { it.id == action.episodeId }
+                    ?.let(onPlayEpisode)
+            }
             is EmbeddedPlayerAction.Playback -> onPlayback(
                 action.positionSeconds,
                 action.durationSeconds,

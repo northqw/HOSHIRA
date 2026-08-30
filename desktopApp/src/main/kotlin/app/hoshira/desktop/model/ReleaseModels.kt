@@ -1,7 +1,10 @@
 package app.hoshira.desktop.model
 
+import androidx.compose.runtime.Immutable
+
 const val YANI_SITE_ORIGIN = "https://yummyani.me"
 
+@Immutable
 data class ReleaseDto(
     val id: Int,
     val alias: String,
@@ -24,11 +27,31 @@ data class ReleaseDto(
         get() = name.main.ifBlank { name.english.orEmpty() }
 
     val posterUrl: String?
-        get() = poster?.bestPortraitPath?.asAbsoluteYaniUrl()
+        get() = posterStandardUrl
+
+    val posterThumbnailUrl: String?
+        get() = poster?.thumbnailUrl
+
+    val posterStandardUrl: String?
+        get() = poster?.standardUrl
+
+    val posterHighUrl: String?
+        get() = poster?.highUrl
+
+    val posterFullUrl: String?
+        get() = poster?.fullUrl
 
     val backdropUrl: String?
-        get() = (backdrop?.bestLandscapePath ?: poster?.bestPortraitPath)
-            ?.asAbsoluteYaniUrl()
+        get() = backdropHighUrl
+
+    val backdropStandardUrl: String?
+        get() = backdrop?.standardUrl ?: posterStandardUrl
+
+    val backdropHighUrl: String?
+        get() = backdrop?.highUrl ?: posterHighUrl
+
+    val backdropFullUrl: String?
+        get() = backdrop?.fullUrl ?: posterFullUrl
 
     val metadata: String
         get() = listOfNotNull(
@@ -39,17 +62,20 @@ data class ReleaseDto(
         ).joinToString("  •  ")
 }
 
+@Immutable
 data class ReleaseNameDto(
     val main: String,
     val english: String? = null,
     val alternative: String? = null,
 )
 
+@Immutable
 data class LabelValueDto(
     val value: String,
     val description: String? = null,
 )
 
+@Immutable
 data class AgeRatingDto(
     val value: String,
     val label: String,
@@ -57,27 +83,46 @@ data class AgeRatingDto(
     val description: String? = null,
 )
 
+@Immutable
 data class GenreDto(
     val id: Int,
     val name: String,
 )
 
+@Immutable
 data class ImageDto(
     val src: String? = null,
     val preview: String? = null,
     val thumbnail: String? = null,
+    val standard: String? = null,
+    val high: String? = null,
+    val full: String? = null,
 ) {
+    val thumbnailUrl: String?
+        get() = firstUsableImageUrl(thumbnail, standard, preview, high, full, src)
+
+    val standardUrl: String?
+        get() = firstUsableImageUrl(standard, thumbnail, preview, high, full, src)
+
+    val highUrl: String?
+        get() = firstUsableImageUrl(high, full, standard, preview, thumbnail, src)
+
+    val fullUrl: String?
+        get() = firstUsableImageUrl(full, high, src, standard, preview, thumbnail)
+
     val bestPortraitPath: String?
-        get() = src ?: preview ?: thumbnail
+        get() = fullUrl
 
     val bestLandscapePath: String?
         get() {
-            val candidates = listOfNotNull(preview, src, thumbnail)
+            val candidates = listOfNotNull(preview, high, full, standard, src, thumbnail)
+                .mapNotNull(::normalizedYaniImageUrl)
             return candidates.firstOrNull { !it.substringBefore('?').endsWith(".avif", ignoreCase = true) }
                 ?: candidates.firstOrNull()
         }
 }
 
+@Immutable
 data class EpisodeDto(
     val id: String,
     val name: String? = null,
@@ -105,7 +150,7 @@ data class EpisodeDto(
             ?: "Источник не указан"
 
     val previewUrl: String?
-        get() = preview?.bestLandscapePath?.asAbsoluteYaniUrl()
+        get() = preview?.bestLandscapePath
 
     /**
      * Yani returns an iframe page here, not a direct HLS/MP4 media stream.
@@ -114,6 +159,7 @@ data class EpisodeDto(
         get() = playerPageUrl?.asAbsoluteYaniUrl()
 }
 
+@Immutable
 data class HomeFeed(
     val featured: List<ReleaseDto>,
     val latest: List<ReleaseDto>,
@@ -136,3 +182,46 @@ fun String.asAbsoluteYaniUrl(): String {
         else -> absoluteUrl
     }
 }
+
+internal fun imageDeliveryCandidates(url: String?): List<String> {
+    val primary = url?.trim()?.takeIf(String::isNotEmpty) ?: return emptyList()
+    val sameQuality = yaniHostCandidates(primary)
+    val lowerQuality = lowerPosterQualityUrl(primary)
+        ?.let(::yaniHostCandidates)
+        .orEmpty()
+    return (sameQuality + lowerQuality).distinct()
+}
+
+private fun yaniHostCandidates(url: String): List<String> = when {
+    url.startsWith("https://imgproxy.yani.tv/") -> listOf(
+        url,
+        "https://static.yani.tv/${url.removePrefix("https://imgproxy.yani.tv/")}",
+    )
+    url.startsWith("https://static.yani.tv/") -> listOf(
+        url,
+        "https://imgproxy.yani.tv/${url.removePrefix("https://static.yani.tv/")}",
+    )
+    else -> listOf(url)
+}
+
+private fun lowerPosterQualityUrl(url: String): String? {
+    val replacements = listOf(
+        "/posters/fullsize/" to "/posters/mega/",
+        "/posters/full/" to "/posters/mega/",
+        "/posters/mega/" to "/posters/big/",
+        "/posters/huge/" to "/posters/big/",
+        "/posters/big/" to "/posters/medium/",
+        "/posters/medium/" to "/posters/small/",
+    )
+    val replacement = replacements.firstOrNull { (source, _) -> source in url } ?: return null
+    return url.replace(replacement.first, replacement.second)
+}
+
+private fun firstUsableImageUrl(vararg candidates: String?): String? =
+    candidates.firstNotNullOfOrNull(::normalizedYaniImageUrl)
+
+private fun normalizedYaniImageUrl(candidate: String?): String? =
+    candidate
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.asAbsoluteYaniUrl()

@@ -1,15 +1,16 @@
 package app.hoshira.desktop.data
 
-import java.net.HttpURLConnection
-import java.net.URI
+import java.io.IOException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 private const val YANI_API_ORIGIN = "https://api.yani.tv"
 private const val DEFAULT_PUBLIC_APPLICATION_TOKEN = "4g434l-dxr66w0ee"
@@ -19,7 +20,9 @@ class YaniApi(
     private val applicationToken: String = System.getenv("YANI_APPLICATION_TOKEN")
         ?.takeIf { it.isNotBlank() }
         ?: DEFAULT_PUBLIC_APPLICATION_TOKEN,
+    private val httpClient: OkHttpClient = SharedHttpClient.api,
 ) {
+    private val responseCache = ApiResponseCache()
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -27,8 +30,12 @@ class YaniApi(
         coerceInputValues = true
     }
 
-    suspend fun feed(): YaniFeedDto =
-        get<YaniResponse<YaniFeedDto>>("/feed").response
+    suspend fun feed(forceRefresh: Boolean = false): YaniFeedDto =
+        cachedGet<YaniResponse<YaniFeedDto>>(
+            path = "/feed",
+            ttlMillis = FEED_CACHE_TTL_MILLIS,
+            forceRefresh = forceRefresh,
+        ).response
 
     suspend fun catalog(
         limit: Int = 30,
@@ -47,16 +54,20 @@ class YaniApi(
         query: String,
         limit: Int = 30,
     ): List<YaniAnimeDto> {
-        val encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8)
+        val encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8.name())
         return get<YaniResponse<List<YaniAnimeDto>>>(
             "/search?q=$encoded&limit=${limit.coerceIn(1, 30)}&offset=0",
         ).response
     }
 
     suspend fun anime(idOrAlias: String): YaniAnimeDto =
-        get<YaniResponse<YaniAnimeDto>>(
-            "/anime/${URLEncoder.encode(idOrAlias, StandardCharsets.UTF_8)}?need_videos=true",
-        ).response
+        "/anime/${URLEncoder.encode(idOrAlias, StandardCharsets.UTF_8.name())}?need_videos=true"
+            .let { path ->
+                cachedGet<YaniResponse<YaniAnimeDto>>(
+                    path = path,
+                    ttlMillis = ANIME_CACHE_TTL_MILLIS,
+                ).response
+            }
 
     suspend fun login(
         login: String,
@@ -158,10 +169,27 @@ class YaniApi(
             bearerToken = accessToken,
         ).response
 
+    internal fun clearResponseMemoryCache() = responseCache.clearMemory()
+
     private suspend inline fun <reified T> get(
         path: String,
         bearerToken: String? = null,
     ): T = execute("GET", path, bearerToken)
+
+    private suspend inline fun <reified T> cachedGet(
+        path: String,
+        ttlMillis: Long,
+        forceRefresh: Boolean = false,
+    ): T {
+        val responseBody = responseCache.get(
+            key = "v1:$baseUrl$path",
+            ttlMillis = ttlMillis,
+            forceRefresh = forceRefresh,
+        ) {
+            executeRaw("GET", path, bearerToken = null)
+        }
+        return json.decodeFromString(responseBody)
+    }
 
     private suspend inline fun <reified B, reified T> post(
         path: String,
@@ -200,54 +228,64 @@ class YaniApi(
         path: String,
         bearerToken: String?,
         body: String? = null,
-    ): T = withContext(Dispatchers.IO) {
-        val connection = (URI("$baseUrl$path").toURL().openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
-            instanceFollowRedirects = true
-            setRequestProperty("Accept", "application/json,image/avif,image/webp")
-            setRequestProperty("Lang", "ru")
-            setRequestProperty("X-Application", applicationToken)
-            setRequestProperty("User-Agent", "Hoshira/0.4")
-            bearerToken
-                ?.takeIf(String::isNotBlank)
-                ?.let { setRequestProperty("Authorization", "Bearer $it") }
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
+    ): T = json.decodeFromString(executeRaw(method, path, bearerToken, body))
+
+    private suspend fun executeRaw(
+        method: String,
+        path: String,
+        bearerToken: String?,
+        body: String? = null,
+    ): String {
+        val requestBody = when {
+            body != null -> body.toRequestBody(JSON_MEDIA_TYPE)
+            method == "POST" || method == "PUT" -> "".toRequestBody(null)
+            else -> null
         }
-        try {
-            if (body != null) {
-                connection.outputStream.use { output ->
-                    output.write(body.toByteArray(StandardCharsets.UTF_8))
+        val request = Request.Builder()
+            .url("$baseUrl$path")
+            .method(method, requestBody)
+            .header("Accept", "application/json,image/avif,image/webp")
+            .header("Lang", "ru")
+            .header("X-Application", applicationToken)
+            .header("User-Agent", "Hoshira/0.4")
+            .apply {
+                bearerToken
+                    ?.takeIf(String::isNotBlank)
+                    ?.let { header("Authorization", "Bearer $it") }
+            }
+            .build()
+
+        var completedAttempts = 0
+        while (true) {
+            completedAttempts++
+            val response = try {
+                httpClient.newCall(request).awaitResponse()
+            } catch (error: IOException) {
+                if (shouldRetryHttpRequest(method, completedAttempts, transportFailure = true)) {
+                    continue
                 }
+                throw error
             }
-            val statusCode = connection.responseCode
-            val responseBody = (if (statusCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            })?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (statusCode !in 200..299) {
-                throw YaniApiException(
-                    statusCode = statusCode,
-                    message = responseBody
-                        .take(400)
-                        .takeIf(String::isNotBlank)
-                        ?: "Yani API вернул код $statusCode",
-                )
+            val statusCode = response.code
+            val responseBody = response.use { it.body?.string().orEmpty() }
+            if (statusCode in 200..299) return responseBody
+            if (shouldRetryHttpRequest(method, completedAttempts, statusCode = statusCode)) {
+                continue
             }
-            json.decodeFromString<T>(responseBody)
-        } finally {
-            connection.disconnect()
+            throw YaniApiException(
+                statusCode = statusCode,
+                message = responseBody
+                    .take(400)
+                    .takeIf(String::isNotBlank)
+                    ?: "Yani API вернул код $statusCode",
+            )
         }
     }
 }
 
-private const val CONNECT_TIMEOUT_MS = 12_000
-private const val READ_TIMEOUT_MS = 24_000
+private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+private const val FEED_CACHE_TTL_MILLIS = 5 * 60 * 1_000L
+private const val ANIME_CACHE_TTL_MILLIS = 12 * 60 * 60 * 1_000L
 
 internal fun catalogPath(
     limit: Int,
@@ -268,7 +306,7 @@ internal fun catalogPath(
         filters.minRating?.coerceIn(0.0, 10.0)?.let { add("min_rating" to it.toString()) }
     }
     return "/anime?" + parameters.joinToString("&") { (name, value) ->
-        "$name=${URLEncoder.encode(value, StandardCharsets.UTF_8)}"
+        "$name=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
     }
 }
 

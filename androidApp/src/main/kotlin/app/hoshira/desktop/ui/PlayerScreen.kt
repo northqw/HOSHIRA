@@ -1,15 +1,21 @@
 package app.hoshira.desktop.ui
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Matrix
 import android.os.SystemClock
 import android.util.Log
+import android.view.KeyEvent as AndroidKeyEvent
 import android.view.TextureView
 import android.view.ViewGroup
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,8 +30,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -38,6 +42,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,8 +51,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -67,17 +79,23 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.session.MediaSession
 import app.hoshira.desktop.PlaybackSession
+import app.hoshira.desktop.PlaybackMediaCache
 import app.hoshira.desktop.data.HlsStreamResolver
 import app.hoshira.desktop.data.PlaybackSource
 import app.hoshira.desktop.data.PlayerPreferences
+import app.hoshira.desktop.data.SharedHttpClient
 import app.hoshira.desktop.model.EpisodeDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -92,8 +110,10 @@ fun PlayerScreen(
     preferences: PlayerPreferences,
     preferredQuality: String?,
     onPlayback: (Double, Double, Float, String?) -> Unit,
+    onPlaybackFlush: () -> Unit,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
+    isTelevision: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val playerUrl = session?.episode?.externalPlayerUrl
@@ -109,6 +129,7 @@ fun PlayerScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentPlayback by rememberUpdatedState(onPlayback)
+    val currentPlaybackFlush by rememberUpdatedState(onPlaybackFlush)
     val currentPlayEpisode by rememberUpdatedState(onPlayEpisode)
     val currentFullscreenChange by rememberUpdatedState(onFullscreenChange)
     val currentAutoplayNext by rememberUpdatedState(preferences.autoplayNext)
@@ -146,13 +167,21 @@ fun PlayerScreen(
     val currentNextEpisode by rememberUpdatedState(nextEpisode)
 
     val player = remember(context) { createNativeHlsPlayer(context.applicationContext) }
+    val mediaSession = remember(player) {
+        MediaSession.Builder(context.applicationContext, player).build()
+    }
     var resolvedSource by remember(playerUrl) { mutableStateOf<PlaybackSource.DirectMedia?>(null) }
     var resolving by remember { mutableStateOf(true) }
     var buffering by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var retryKey by remember(playerUrl) { mutableLongStateOf(0L) }
+    var sourceRefreshAttempts by remember(playerUrl) { mutableIntStateOf(0) }
     var isPlaying by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
+    var controlsFocused by remember { mutableStateOf(false) }
+    var controlsInteractionKey by remember { mutableLongStateOf(0L) }
+    var focusChromeOnVisible by remember { mutableStateOf(false) }
+    var playerSurfaceFocused by remember { mutableStateOf(false) }
     var sourceMenuExpanded by remember { mutableStateOf(false) }
     var qualityMenuExpanded by remember { mutableStateOf(false) }
     var selectedQualityOverride by remember(playerUrl) { mutableStateOf(preferredQuality) }
@@ -166,12 +195,59 @@ fun PlayerScreen(
     var playerHeight by remember { mutableFloatStateOf(1f) }
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
     val currentResolvedSource by rememberUpdatedState(resolvedSource)
+    val playerSurfaceFocusRequester = remember { FocusRequester() }
+    val playButtonFocusRequester = remember { FocusRequester() }
     val debugStartedAt = remember(playerUrl) { SystemClock.elapsedRealtime() }
     fun debug(message: String) {
         Log.d(PLAYER_DEBUG_TAG, "+${SystemClock.elapsedRealtime() - debugStartedAt}ms $message")
     }
+    fun reportPlaybackAndFlush() {
+        val duration = player.safeDuration()
+        if (duration > 0L) {
+            currentPlayback(
+                player.currentPosition.coerceAtLeast(0L) / 1_000.0,
+                duration / 1_000.0,
+                player.volume,
+                currentResolvedSource?.quality,
+            )
+        }
+        currentPlaybackFlush()
+    }
+    fun seekBy(deltaMs: Long) {
+        player.seekTo(
+            (player.currentPosition + deltaMs)
+                .coerceIn(0L, player.safeDuration().takeIf { it > 0L } ?: Long.MAX_VALUE),
+        )
+        controlsVisible = true
+        controlsInteractionKey++
+        reportPlaybackAndFlush()
+    }
 
-    BackHandler(onBack = onBack)
+    BackHandler {
+        if (isTelevision && controlsVisible) {
+            sourceMenuExpanded = false
+            qualityMenuExpanded = false
+            focusChromeOnVisible = false
+            controlsVisible = false
+        } else {
+            onBack()
+        }
+    }
+
+    LaunchedEffect(isTelevision, controlsVisible, focusChromeOnVisible) {
+        if (!isTelevision) return@LaunchedEffect
+        // Wait until the requested focus target has entered the composition.
+        delay(32L)
+        runCatching {
+            if (controlsVisible && focusChromeOnVisible) {
+                playButtonFocusRequester.requestFocus()
+                delay(32L)
+                focusChromeOnVisible = false
+            } else if (!controlsVisible || !controlsFocused) {
+                playerSurfaceFocusRequester.requestFocus()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (!isFullscreen) currentFullscreenChange(true)
@@ -200,7 +276,7 @@ fun PlayerScreen(
         result.onSuccess { source ->
             resolvedSource = source
             player.volume = volume
-            player.setMediaSource(source.toAndroidMediaSource())
+            player.setMediaSource(source.toAndroidMediaSource(context.applicationContext))
             player.seekTo((resumeSeconds * 1_000.0).toLong().coerceAtLeast(0L))
             player.prepare()
             player.playWhenReady = true
@@ -213,7 +289,7 @@ fun PlayerScreen(
         }
     }
 
-    DisposableEffect(player, lifecycleOwner) {
+    DisposableEffect(player, mediaSession, lifecycleOwner) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
@@ -229,9 +305,20 @@ fun PlayerScreen(
             override fun onIsPlayingChanged(value: Boolean) {
                 isPlaying = value
                 if (value) controlsVisible = true
+                if (!value && player.playbackState != Player.STATE_IDLE) {
+                    reportPlaybackAndFlush()
+                }
             }
 
             override fun onPlayerError(playerError: PlaybackException) {
+                val expiredStatus = playerError.expiredHttpStatusCode()
+                if (expiredStatus != null && sourceRefreshAttempts < MAX_SOURCE_REFRESH_ATTEMPTS) {
+                    pendingResumeSeconds = player.currentPosition.coerceAtLeast(0L) / 1_000.0
+                    sourceRefreshAttempts++
+                    retryKey++
+                    debug("HTTP $expiredStatus; resolving a fresh media URL")
+                    return
+                }
                 resolving = false
                 buffering = false
                 error = "Поток прервался. Проверьте подключение и попробуйте снова."
@@ -258,7 +345,10 @@ fun PlayerScreen(
             }
         }
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) player.pause()
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                reportPlaybackAndFlush()
+            }
         }
         player.addListener(listener)
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -270,14 +360,16 @@ fun PlayerScreen(
                 player.volume,
                 currentResolvedSource?.quality,
             )
+            currentPlaybackFlush()
             player.removeListener(listener)
             lifecycleOwner.lifecycle.removeObserver(observer)
+            mediaSession.release()
             player.release()
             currentFullscreenChange(false)
         }
     }
 
-    LaunchedEffect(player, resolvedSource) {
+    LaunchedEffect(player, resolvedSource, controlsVisible) {
         while (true) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = player.safeDuration()
@@ -288,13 +380,13 @@ fun PlayerScreen(
                     0f
                 }
             }
-            delay(250L)
+            delay(playerUiRefreshIntervalMillis(controlsVisible))
         }
     }
 
-    LaunchedEffect(player, resolvedSource) {
+    LaunchedEffect(player, resolvedSource, controlsVisible) {
         while (true) {
-            delay(1_000L)
+            delay(playbackReportIntervalMillis(controlsVisible))
             val duration = player.safeDuration()
             if (resolvedSource != null && duration > 0L) {
                 currentPlayback(
@@ -307,8 +399,22 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(controlsVisible, isPlaying, sourceMenuExpanded, qualityMenuExpanded, preferences.controlsHideDelayMs) {
-        if (controlsVisible && isPlaying && !sourceMenuExpanded && !qualityMenuExpanded) {
+    LaunchedEffect(
+        controlsVisible,
+        controlsFocused,
+        controlsInteractionKey,
+        isPlaying,
+        sourceMenuExpanded,
+        qualityMenuExpanded,
+        preferences.controlsHideDelayMs,
+    ) {
+        if (
+            controlsVisible &&
+            isPlaying &&
+            !controlsFocused &&
+            !sourceMenuExpanded &&
+            !qualityMenuExpanded
+        ) {
             delay(preferences.controlsHideDelayMs.coerceAtLeast(1_200).toLong())
             controlsVisible = false
         }
@@ -318,6 +424,84 @@ fun PlayerScreen(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
+            .onPreviewKeyEvent keyHandler@ { event ->
+                if (!isTelevision || event.type != KeyEventType.KeyDown) {
+                    return@keyHandler false
+                }
+
+                controlsInteractionKey++
+                when (event.nativeKeyEvent.keyCode) {
+                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                        if (player.isPlaying) player.pause() else player.play()
+                        controlsVisible = true
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> {
+                        player.play()
+                        controlsVisible = true
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_PAUSE,
+                    AndroidKeyEvent.KEYCODE_MEDIA_STOP,
+                    -> {
+                        player.pause()
+                        controlsVisible = true
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
+                        seekBy(-TV_SEEK_STEP_MS)
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                        seekBy(TV_SEEK_STEP_MS)
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        if (playerSurfaceFocused || !controlsVisible) {
+                            seekBy(-TV_SEEK_STEP_MS)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (playerSurfaceFocused || !controlsVisible) {
+                            seekBy(TV_SEEK_STEP_MS)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_UP,
+                    AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                    -> {
+                        if (playerSurfaceFocused || !controlsVisible) {
+                            controlsVisible = true
+                            focusChromeOnVisible = true
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+                    AndroidKeyEvent.KEYCODE_ENTER,
+                    AndroidKeyEvent.KEYCODE_SPACE,
+                    AndroidKeyEvent.KEYCODE_BUTTON_A,
+                    -> {
+                        if (playerSurfaceFocused || !controlsVisible) {
+                            if (player.isPlaying) player.pause() else player.play()
+                            controlsVisible = true
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    else -> false
+                }
+            }
+            .onFocusChanged { playerSurfaceFocused = it.isFocused }
+            .focusRequester(playerSurfaceFocusRequester)
+            .focusable(enabled = isTelevision)
             .onSizeChanged {
                 playerWidth = it.width.coerceAtLeast(1).toFloat()
                 playerHeight = it.height.coerceAtLeast(1).toFloat()
@@ -334,10 +518,7 @@ fun PlayerScreen(
                         if (delta == 0L) {
                             if (player.isPlaying) player.pause() else player.play()
                         } else {
-                            player.seekTo(
-                                (player.currentPosition + delta)
-                                    .coerceIn(0L, player.safeDuration().takeIf { it > 0L } ?: Long.MAX_VALUE),
-                            )
+                            seekBy(delta)
                         }
                         controlsVisible = true
                     },
@@ -380,14 +561,12 @@ fun PlayerScreen(
                 onSourceMenuExpandedChange = { sourceMenuExpanded = it },
                 onSourceSelected = currentPlayEpisode,
                 onBack = onBack,
+                isTelevision = isTelevision,
+                playButtonFocusRequester = playButtonFocusRequester,
+                onControlsFocusChanged = { controlsFocused = it },
                 isPlaying = isPlaying,
                 onTogglePlayback = { if (player.isPlaying) player.pause() else player.play() },
-                onSeekBy = { delta ->
-                    player.seekTo(
-                        (player.currentPosition + delta)
-                            .coerceIn(0L, player.safeDuration().takeIf { it > 0L } ?: Long.MAX_VALUE),
-                    )
-                },
+                onSeekBy = ::seekBy,
                 seekFraction = seekFraction,
                 onSeekFractionChange = {
                     seeking = true
@@ -396,6 +575,7 @@ fun PlayerScreen(
                 onSeekFinished = {
                     if (durationMs > 0L) player.seekTo((durationMs * seekFraction).toLong())
                     seeking = false
+                    reportPlaybackAndFlush()
                 },
                 elapsed = "${positionMs.clockText()} / ${durationMs.clockText()}",
                 quality = resolvedSource?.quality ?: "Авто",
@@ -443,13 +623,14 @@ fun PlayerScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(message, color = AniColors.Text, fontWeight = FontWeight.Bold)
-                    Button(
-                        onClick = { retryKey++ },
+                    PrimaryAction(
+                        label = "Повторить",
+                        onClick = {
+                            sourceRefreshAttempts = 0
+                            retryKey++
+                        },
                         modifier = Modifier.padding(top = 18.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AniColors.Orange),
-                    ) {
-                        Text("Повторить")
-                    }
+                    )
                 }
             }
         }
@@ -482,14 +663,19 @@ private fun TextureView.applyAspectFitTransform(
 
 @OptIn(UnstableApi::class)
 private fun createNativeHlsPlayer(context: Context): ExoPlayer {
+    val isLowRamDevice = context
+        .getSystemService(ActivityManager::class.java)
+        ?.isLowRamDevice == true
+    val bufferProfile = playerBufferProfile(isLowRamDevice)
     val loadControl = DefaultLoadControl.Builder()
         .setBufferDurationsMs(
-            30_000,
-            75_000,
-            2_500,
-            5_000,
+            bufferProfile.minBufferMs,
+            bufferProfile.maxBufferMs,
+            bufferProfile.bufferForPlaybackMs,
+            bufferProfile.bufferForPlaybackAfterRebufferMs,
         )
-        .setPrioritizeTimeOverSizeThresholds(true)
+        .setTargetBufferBytes(bufferProfile.targetBufferBytes)
+        .setPrioritizeTimeOverSizeThresholds(false)
         .build()
     val renderers = DefaultRenderersFactory(context)
         .setEnableDecoderFallback(true)
@@ -505,12 +691,17 @@ private fun createNativeHlsPlayer(context: Context): ExoPlayer {
 }
 
 @OptIn(UnstableApi::class)
-private fun PlaybackSource.DirectMedia.toAndroidMediaSource(): MediaSource {
+private fun PlaybackSource.DirectMedia.toAndroidMediaSource(context: Context): MediaSource {
     val requestUserAgent = headers["User-Agent"] ?: ANDROID_HLS_USER_AGENT
-    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-        .setAllowCrossProtocolRedirects(true)
+    val upstreamFactory = OkHttpDataSource.Factory(SharedHttpClient.media)
         .setUserAgent(requestUserAgent)
         .setDefaultRequestProperties(headers - "User-Agent")
+    val cacheDataSourceFactory = CacheDataSource.Factory()
+        .setCache(PlaybackMediaCache.get(context))
+        .setUpstreamDataSourceFactory(upstreamFactory)
+        .setCacheKeyFactory { dataSpec -> stableMediaCacheKey(dataSpec.uri.toString()) }
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    val loadErrorPolicy = DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT)
     val isHls = url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
     val item = MediaItem.Builder()
         .setUri(url)
@@ -519,11 +710,20 @@ private fun PlaybackSource.DirectMedia.toAndroidMediaSource(): MediaSource {
         }
         .build()
     return if (isHls) {
-        HlsMediaSource.Factory(httpDataSourceFactory).createMediaSource(item)
+        HlsMediaSource.Factory(cacheDataSourceFactory)
+            .setLoadErrorHandlingPolicy(loadErrorPolicy)
+            .createMediaSource(item)
     } else {
-        ProgressiveMediaSource.Factory(httpDataSourceFactory).createMediaSource(item)
+        ProgressiveMediaSource.Factory(cacheDataSourceFactory)
+            .setLoadErrorHandlingPolicy(loadErrorPolicy)
+            .createMediaSource(item)
     }
 }
+
+private fun Throwable.expiredHttpStatusCode(): Int? = generateSequence(this) { it.cause }
+    .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+    .map(HttpDataSource.InvalidResponseCodeException::responseCode)
+    .firstOrNull(::shouldReresolveMediaSource)
 
 private suspend fun resolveAndroidHls(
     resolver: HlsStreamResolver,
@@ -574,6 +774,9 @@ private fun PlayerChrome(
     onSourceMenuExpandedChange: (Boolean) -> Unit,
     onSourceSelected: (EpisodeDto) -> Unit,
     onBack: () -> Unit,
+    isTelevision: Boolean,
+    playButtonFocusRequester: FocusRequester,
+    onControlsFocusChanged: (Boolean) -> Unit,
     isPlaying: Boolean,
     onTogglePlayback: () -> Unit,
     onSeekBy: (Long) -> Unit,
@@ -591,7 +794,20 @@ private fun PlayerChrome(
     onPlayEpisode: (EpisodeDto) -> Unit,
     isLoading: Boolean,
 ) {
-    Box(Modifier.fillMaxSize()) {
+    val sliderFocusRequester = remember { FocusRequester() }
+    val previousEpisodeFocusRequester = remember { FocusRequester() }
+    val nextEpisodeFocusRequester = remember { FocusRequester() }
+    val episodeActionFocusRequester = when {
+        nextEpisode != null -> nextEpisodeFocusRequester
+        previousEpisode != null -> previousEpisodeFocusRequester
+        else -> null
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onFocusChanged { onControlsFocusChanged(it.hasFocus) }
+            .focusGroup(),
+    ) {
         Box(
             Modifier
                 .align(Alignment.TopCenter)
@@ -647,6 +863,10 @@ private fun PlayerChrome(
                             )
                             sources.forEach { episode ->
                                 val enabled = !episode.isDeferredAlloha()
+                                var itemFocused by remember(episode.id) { mutableStateOf(false) }
+                                val itemScale by animateFloatAsState(
+                                    if (itemFocused) 1.025f else 1f,
+                                )
                                 DropdownMenuItem(
                                     text = {
                                         Column(Modifier.fillMaxWidth()) {
@@ -666,6 +886,17 @@ private fun PlayerChrome(
                                         }
                                     },
                                     enabled = enabled && episode.id != selectedEpisodeId,
+                                    modifier = Modifier
+                                        .graphicsLayer {
+                                            scaleX = itemScale
+                                            scaleY = itemScale
+                                        }
+                                        .border(
+                                            if (itemFocused) 2.dp else 0.dp,
+                                            if (itemFocused) AniColors.OrangeBright else Color.Transparent,
+                                            RoundedCornerShape(10.dp),
+                                        )
+                                        .onFocusChanged { itemFocused = it.isFocused },
                                     onClick = {
                                         onSourceMenuExpandedChange(false)
                                         onSourceSelected(episode)
@@ -686,7 +917,13 @@ private fun PlayerChrome(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PlayerRoundButton("−10", { onSeekBy(-10_000L) }, large = true)
-                PlayerRoundButton(if (isPlaying) "❚❚" else "▶", onTogglePlayback, large = true, accent = true)
+                PlayerRoundButton(
+                    text = if (isPlaying) "❚❚" else "▶",
+                    onClick = onTogglePlayback,
+                    large = true,
+                    accent = true,
+                    focusRequester = playButtonFocusRequester.takeIf { isTelevision },
+                )
                 PlayerRoundButton("+10", { onSeekBy(10_000L) }, large = true)
             }
         }
@@ -702,12 +939,48 @@ private fun PlayerChrome(
                 )
                 .padding(horizontal = 24.dp, vertical = 18.dp),
         ) {
-            Slider(
-                value = seekFraction,
-                onValueChange = onSeekFractionChange,
-                onValueChangeFinished = onSeekFinished,
-                colors = playerSliderColors(),
-            )
+            var sliderFocused by remember { mutableStateOf(false) }
+            val sliderScale by animateFloatAsState(if (sliderFocused) 1.012f else 1f)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        scaleX = sliderScale
+                        scaleY = sliderScale
+                    }
+                    .border(
+                        if (sliderFocused) 2.dp else 0.dp,
+                        if (sliderFocused) AniColors.OrangeBright else Color.Transparent,
+                        RoundedCornerShape(12.dp),
+                    )
+                    .padding(horizontal = 4.dp),
+            ) {
+                Slider(
+                    value = seekFraction,
+                    onValueChange = onSeekFractionChange,
+                    onValueChangeFinished = onSeekFinished,
+                    colors = playerSliderColors(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(sliderFocusRequester)
+                        .onFocusChanged { sliderFocused = it.isFocused }
+                        .onPreviewKeyEvent { event ->
+                            if (
+                                shouldMoveTimelineFocusToEpisodeActions(
+                                    keyCode = event.nativeKeyEvent.keyCode,
+                                    eventType = event.type,
+                                    isTelevision = isTelevision,
+                                    hasEpisodeActions = episodeActionFocusRequester != null,
+                                )
+                            ) {
+                                episodeActionFocusRequester?.requestFocus()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(elapsed, color = AniColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.width(12.dp))
@@ -726,6 +999,10 @@ private fun PlayerChrome(
                         containerColor = AniColors.SurfaceHigh,
                     ) {
                         qualities.forEach { option ->
+                            var itemFocused by remember(option) { mutableStateOf(false) }
+                            val itemScale by animateFloatAsState(
+                                if (itemFocused) 1.025f else 1f,
+                            )
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -739,6 +1016,17 @@ private fun PlayerChrome(
                                     )
                                 },
                                 enabled = option != quality,
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        scaleX = itemScale
+                                        scaleY = itemScale
+                                    }
+                                    .border(
+                                        if (itemFocused) 2.dp else 0.dp,
+                                        if (itemFocused) AniColors.OrangeBright else Color.Transparent,
+                                        RoundedCornerShape(10.dp),
+                                    )
+                                    .onFocusChanged { itemFocused = it.isFocused },
                                 onClick = {
                                     onQualityMenuExpandedChange(false)
                                     onQualitySelected(option)
@@ -749,11 +1037,22 @@ private fun PlayerChrome(
                 }
                 Spacer(Modifier.weight(1f))
                 previousEpisode?.let { episode ->
-                    PlayerPill("‹ Предыдущая", { onPlayEpisode(episode) })
+                    PlayerPill(
+                        text = "‹ Предыдущая",
+                        onClick = { onPlayEpisode(episode) },
+                        focusRequester = previousEpisodeFocusRequester,
+                        upFocusRequester = sliderFocusRequester,
+                    )
                     Spacer(Modifier.width(8.dp))
                 }
                 nextEpisode?.let { episode ->
-                    PlayerPill("Следующая ›", { onPlayEpisode(episode) }, accent = true)
+                    PlayerPill(
+                        text = "Следующая ›",
+                        onClick = { onPlayEpisode(episode) },
+                        accent = true,
+                        focusRequester = nextEpisodeFocusRequester,
+                        upFocusRequester = sliderFocusRequester,
+                    )
                     Spacer(Modifier.width(8.dp))
                 }
             }
@@ -766,9 +1065,38 @@ private fun PlayerPill(
     text: String,
     onClick: () -> Unit,
     accent: Boolean = false,
+    focusRequester: FocusRequester? = null,
+    upFocusRequester: FocusRequester? = null,
 ) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) TV_FOCUS_SCALE else 1f)
+    val requesterModifier = focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .border(
+                if (focused) 2.dp else 0.dp,
+                if (focused) AniColors.OrangeBright else Color.Transparent,
+                RoundedCornerShape(50),
+            )
+            .then(requesterModifier)
+            .onPreviewKeyEvent { event ->
+                if (
+                    upFocusRequester != null &&
+                    event.type == KeyEventType.KeyDown &&
+                    event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP
+                ) {
+                    upFocusRequester.requestFocus()
+                    true
+                } else {
+                    false
+                }
+            }
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(50),
         color = if (accent) AniColors.Orange else AniColors.SurfaceHigh.copy(alpha = 0.92f),
     ) {
@@ -789,11 +1117,29 @@ private fun PlayerRoundButton(
     onClick: () -> Unit,
     large: Boolean = false,
     accent: Boolean = false,
+    focusRequester: FocusRequester? = null,
 ) {
     val diameter = if (large) 62.dp else 46.dp
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) TV_FOCUS_SCALE else 1f)
+    val requesterModifier = if (focusRequester != null) {
+        Modifier.focusRequester(focusRequester)
+    } else {
+        Modifier
+    }
     Surface(
-        modifier = Modifier
+        modifier = requesterModifier
             .size(diameter)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .border(
+                if (focused) 2.dp else 0.dp,
+                if (focused) AniColors.OrangeBright else Color.Transparent,
+                CircleShape,
+            )
+            .onFocusChanged { focused = it.isFocused }
             .clickable(onClick = onClick),
         shape = CircleShape,
         color = if (accent) AniColors.Orange else AniColors.SurfaceHigh.copy(alpha = 0.9f),
@@ -834,5 +1180,20 @@ private fun Long.clockText(): String {
 private fun EpisodeDto.isDeferredAlloha(): Boolean =
     displayPlayerName.contains("Alloha", ignoreCase = true)
 
+internal fun shouldMoveTimelineFocusToEpisodeActions(
+    keyCode: Int,
+    eventType: KeyEventType,
+    isTelevision: Boolean,
+    hasEpisodeActions: Boolean,
+): Boolean =
+    isTelevision &&
+        hasEpisodeActions &&
+        eventType == KeyEventType.KeyDown &&
+        keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
+
 private const val PLAYER_DEBUG_TAG = "HoshiraPlayer"
 private const val ANDROID_HLS_USER_AGENT = "Hoshira Android HLS/0.4.0"
+private const val MEDIA_MINIMUM_RETRY_COUNT = 3
+private const val MAX_SOURCE_REFRESH_ATTEMPTS = 1
+private const val TV_SEEK_STEP_MS = 10_000L
+private const val TV_FOCUS_SCALE = 1.06f
