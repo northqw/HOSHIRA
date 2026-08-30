@@ -53,6 +53,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -116,16 +118,17 @@ fun HoshiraMobileApp(
         val searchResultsGridState = rememberLazyGridState()
         val searchHistoryGridState = rememberLazyGridState()
         val profileGridState = rememberLazyGridState()
-        val detailsListState = rememberLazyListState()
+        var detailsScrollGeneration by remember { mutableIntStateOf(0) }
+        val detailsListState = key(detailsScrollGeneration) { rememberLazyListState() }
         val openRelease: (Int) -> Unit = { releaseId ->
+            detailsScrollGeneration++
             scope.launch {
-                detailsListState.scrollToItem(0)
                 controller.showDetails(releaseId)
             }
         }
         val openSearchRelease: (Int) -> Unit = { releaseId ->
+            detailsScrollGeneration++
             scope.launch {
-                detailsListState.scrollToItem(0)
                 controller.showSearchResultDetails(releaseId)
             }
         }

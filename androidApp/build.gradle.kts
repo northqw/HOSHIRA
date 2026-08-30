@@ -51,7 +51,7 @@ android {
         applicationId = "app.hoshira"
         minSdk = 26
         targetSdk = 36
-        versionCode = 406
+        versionCode = 407
         versionName = "0.4.1"
     }
 
